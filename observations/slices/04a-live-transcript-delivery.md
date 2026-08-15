@@ -41,7 +41,7 @@ microphone or generated answer
 
 ## Exit gate
 
-- [ ] Observable path succeeds repeatedly.
+- [x] Observable path succeeds repeatedly.
 - [x] Failure path is visible and controlled.
 - [x] Previous tests still pass.
 - [x] Offline artifacts and live-observation limitations are recorded.
@@ -76,7 +76,18 @@ microphone or generated answer
 - No agent transcript was produced because an independent application transition
   bug rejected a question received just after the final beat committed. That
   recovery is tracked in `04b-post-completion-question-recovery.md`.
-- The live exit gate therefore remains open.
+- The live exit gate remained open after this failed attempt and was closed by the
+  later successful observations below.
+
+## Successful live observations: 16 August 2026
+
+- Attempts `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` and
+  `81045d4f-104d-4f9f-a15f-f943738da0d7` displayed normalized user and assistant
+  transcript rows while interruption and resumption remained audible and responsive.
+- Closely timed fragments no longer reproduced the original three-row failure.
+- Interruption boundaries can still leave a truncated assistant segment or a
+  discontinuous user utterance. This is recorded as KI-002 in
+  `observations/known-issues.md`; it does not block the transcript transport gate.
 
 ## Fallback or rollback
 

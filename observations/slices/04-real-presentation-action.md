@@ -44,11 +44,11 @@ listener -> browser microphone -> LiveKit pipeline -> typed application intent
 
 ## Exit gate
 
-- [ ] Observable path succeeds repeatedly.
-- [ ] Failure path is visible and controlled.
-- [x] Previous tests still pass: 138 Python tests passed with the opt-in paid
-  LiveKit test skipped; 33 frontend tests and the production build passed.
-- [ ] Artifacts and limitations are recorded.
+- [x] Observable path succeeds repeatedly.
+- [x] Failure path is visible and controlled.
+- [x] Previous tests still pass: 154 Python tests passed with the opt-in paid
+  LiveKit test skipped; 42 frontend tests and the production build passed.
+- [x] Artifacts and limitations are recorded.
 
 ## Automated evidence
 
@@ -63,14 +63,22 @@ listener -> browser microphone -> LiveKit pipeline -> typed application intent
   TypeScript and Vite production build passed; Vite reported only the existing
   large-chunk advisory.
 
-## Live observation pending
+## Live observation: 16 August 2026
 
-Run two fresh `/live` attempts with headphones. In the first, interrupt the opening
-beat with “Why does engine braking feel stronger in a low gear?” and verify that the
-answer finishes in `waiting`. Use the Continue button and verify the same beat is
-selected again. In the second, interrupt with the same question followed by
-“Continue after answering” and verify direct same-beat resumption. Retain attempt IDs,
-screenshots, transcript, event log, timing cards, and a short recording.
+- The listener confirmed both required cases worked with headphones: a normal
+  interruption/default wait flow and an explicit answer-and-continue flow.
+- Attempt `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` retained live transcript and
+  timing evidence for the normal interruption case.
+- Attempt `81045d4f-104d-4f9f-a15f-f943738da0d7` automatically resumed after the
+  answer without a button press and committed the preserved narration beat exactly
+  once.
+- Observed response timing remained conversational: end-of-turn detection was
+  1.20 seconds, LLM first token was 460–752 ms, and TTS first audio was 421–595 ms
+  in the retained screenshots.
+- The answer-and-continue response unnecessarily asked whether the listener was
+  ready before the application correctly resumed. Transcript discontinuity and a
+  false `out_of_scope` display were also observed. These non-blocking refinements
+  are retained in `observations/known-issues.md`.
 
 ## Fallback or rollback
 

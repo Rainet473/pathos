@@ -54,10 +54,10 @@ STT fragments -> endpoint window -> normalized transcript group -> one UI row
 
 ## Exit gate
 
-- [ ] Observable path succeeds repeatedly.
+- [x] Observable path succeeds repeatedly.
 - [x] Failure path is visible and explained.
 - [x] Previous deterministic tests still pass.
-- [ ] Live evidence is recorded.
+- [x] Live evidence is recorded.
 
 ## Offline evidence: 16 August 2026
 
@@ -80,6 +80,16 @@ STT fragments -> endpoint window -> normalized transcript group -> one UI row
 - Full frontend result: 8 files and 42 tests passed.
 - TypeScript production build passed. Vite retains the known non-blocking warning
   for the approximately 717 kB application bundle.
+
+## Live evidence: 16 August 2026
+
+- The listener reran both the normal interruption and explicit
+  answer-and-continue paths and confirmed that each produced audible responses.
+- Attempts `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` and
+  `81045d4f-104d-4f9f-a15f-f943738da0d7` reached `completed` with the beat
+  committed exactly once and without the earlier `TransitionRejected` traceback.
+- The transcript remained populated. Its remaining interruption-boundary
+  discontinuity is a display-quality limitation tracked separately as KI-002.
 
 ## Fallback or rollback
 
