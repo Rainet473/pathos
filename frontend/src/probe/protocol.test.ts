@@ -32,6 +32,21 @@ describe("probe wire protocol", () => {
     });
   });
 
+  it("encodes replay acknowledgement as an attempt-scoped control packet", () => {
+    const encoded = createControlPacket(
+      "replay_acknowledged",
+      "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+      124,
+    );
+
+    expect(JSON.parse(new TextDecoder().decode(encoded))).toEqual({
+      version: 1,
+      type: "replay_acknowledged",
+      attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+      emittedAtMs: 124,
+    });
+  });
+
   it("accepts replay status and rejects malformed or unsupported packets", () => {
     const decoder = new TextEncoder();
     expect(

@@ -229,6 +229,7 @@ frontend/dist/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+.runtime/
 *.egg-info/
 __pycache__/
 .pytest_cache/

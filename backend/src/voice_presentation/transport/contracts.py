@@ -30,6 +30,7 @@ class ProbeSignalType(StrEnum):
     CAPTURE_STOPPED = "capture_stopped"
     REPLAY_STARTED = "replay_started"
     REPLAY_COMPLETED = "replay_completed"
+    REPLAY_ACKNOWLEDGED = "replay_acknowledged"
     FAILED = "failed"
 
 

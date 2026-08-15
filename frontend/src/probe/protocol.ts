@@ -1,6 +1,9 @@
 export const CONTROL_TOPIC = "voice-probe.control.v1";
 
-export type CaptureControlType = "capture_started" | "capture_stopped";
+export type ProbeControlType =
+  | "capture_started"
+  | "capture_stopped"
+  | "replay_acknowledged";
 export type ProbeStatusType = "replay_started" | "replay_completed" | "failed";
 
 export interface AttemptIdentifiers {
@@ -39,7 +42,7 @@ export function createAttemptIdentifiers(attemptId: string): AttemptIdentifiers 
 }
 
 export function createControlPacket(
-  type: CaptureControlType,
+  type: ProbeControlType,
   attemptId: string,
   emittedAtMs: number,
 ): Uint8Array<ArrayBuffer> {

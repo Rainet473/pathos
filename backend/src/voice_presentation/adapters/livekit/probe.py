@@ -5,6 +5,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Protocol
 
 from livekit import rtc
@@ -14,10 +15,12 @@ from voice_presentation.transport.contracts import (
     AudioFrameMetadata,
     ProbeAttempt,
     ProbeControlSignal,
+    ProbePhase,
     ProbeSignalMetrics,
     ProbeSignalType,
     ProbeTransitionRejected,
 )
+from voice_presentation.transport.usage import NullUsageLedger, UsageLedger, UsageRecord
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,9 @@ SAMPLE_RATE_HZ = 48_000
 CHANNEL_COUNT = 1
 FRAME_SIZE_MS = 20
 MAX_CLIP_DURATION_MS = 5_000
+CAPTURE_DRAIN_SECONDS = 0.25
+CAPTURE_STOP_SIGNAL_TIMEOUT_SECONDS = 1
+REPLAY_ACK_TIMEOUT_SECONDS = 2
 
 
 class ProbeSessionAlreadyActive(RuntimeError):
@@ -43,17 +49,28 @@ class RunnableProbeSession(Protocol):
 SessionFactory = Callable[[ProbeSessionSpec], RunnableProbeSession]
 
 
+class AudioStreamLike(Protocol):
+    def __aiter__(self): ...
+
+    async def aclose(self) -> None: ...
+
+
+AudioStreamFactory = Callable[..., AudioStreamLike]
+
+
 class LiveKitProbeSessionLauncher:
     def __init__(
         self,
         *,
         session_factory: SessionFactory | None = None,
         ready_timeout_seconds: float = 8,
+        usage_ledger: UsageLedger | None = None,
     ) -> None:
         if ready_timeout_seconds <= 0:
             raise ValueError("ready timeout must be positive")
         self._session_factory = session_factory or LiveKitRecordReplaySession
         self._ready_timeout_seconds = ready_timeout_seconds
+        self._usage_ledger = usage_ledger or NullUsageLedger()
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def launch(self, session: ProbeSessionSpec) -> None:
@@ -64,7 +81,10 @@ class LiveKitProbeSessionLauncher:
 
         ready = asyncio.Event()
         runner = self._session_factory(session)
-        task = asyncio.create_task(runner.run(ready), name=f"probe-{session.attempt_id}")
+        task = asyncio.create_task(
+            self._run_and_record(session, runner, ready),
+            name=f"probe-{session.attempt_id}",
+        )
         self._tasks[session.attempt_id] = task
         task.add_done_callback(
             lambda finished, attempt_id=session.attempt_id: self._on_session_finished(
@@ -95,6 +115,37 @@ class LiveKitProbeSessionLauncher:
             await task
         self._tasks.pop(session.attempt_id, None)
         raise ProbeSessionLaunchError("probe worker did not become ready in time")
+
+    async def _run_and_record(
+        self,
+        session: ProbeSessionSpec,
+        runner: RunnableProbeSession,
+        ready: asyncio.Event,
+    ) -> None:
+        started_at = datetime.now(UTC)
+        started_monotonic = time.monotonic()
+        outcome = "completed"
+        try:
+            await runner.run(ready)
+            outcome = getattr(runner, "usage_outcome", "completed")
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Exception:
+            outcome = "failed"
+            raise
+        finally:
+            record = UsageRecord.from_duration(
+                attempt_id=session.attempt_id,
+                started_at=started_at,
+                duration_seconds=max(0, time.monotonic() - started_monotonic),
+                outcome=outcome,
+                browser_participant_minutes_upper_bound=1,
+            )
+            try:
+                self._usage_ledger.record(record)
+            except Exception:
+                logger.exception("Could not append the local LiveKit usage ledger")
 
     async def aclose(self) -> None:
         tasks = list(self._tasks.values())
@@ -129,16 +180,38 @@ class LiveKitRecordReplaySession:
         *,
         room: rtc.Room | None = None,
         session_timeout_seconds: float = 60,
+        audio_stream_factory: AudioStreamFactory | None = None,
+        capture_drain_seconds: float = CAPTURE_DRAIN_SECONDS,
+        capture_stop_signal_timeout_seconds: float = CAPTURE_STOP_SIGNAL_TIMEOUT_SECONDS,
+        replay_ack_timeout_seconds: float = REPLAY_ACK_TIMEOUT_SECONDS,
     ) -> None:
         if session_timeout_seconds <= 0:
             raise ValueError("session timeout must be positive")
+        if capture_drain_seconds <= 0:
+            raise ValueError("capture drain must be positive")
+        if capture_stop_signal_timeout_seconds <= 0:
+            raise ValueError("capture stop-signal timeout must be positive")
+        if replay_ack_timeout_seconds <= 0:
+            raise ValueError("replay acknowledgement timeout must be positive")
         self._spec = spec
         self._room = room or rtc.Room()
         self._session_timeout_seconds = session_timeout_seconds
+        self._audio_stream_factory = audio_stream_factory or rtc.AudioStream
+        self._capture_drain_seconds = capture_drain_seconds
+        self._capture_stop_signal_timeout_seconds = capture_stop_signal_timeout_seconds
+        self._replay_ack_timeout_seconds = replay_ack_timeout_seconds
         self._attempt = ProbeAttempt(attempt_id=spec.attempt_id)
         self._finished = asyncio.Event()
+        self._capture_stopped = asyncio.Event()
+        self._replay_acknowledged = asyncio.Event()
         self._clock_started = time.monotonic()
         self._capture_task: asyncio.Task[None] | None = None
+
+    @property
+    def usage_outcome(self) -> str:
+        if self._attempt.phase is ProbePhase.FAILED:
+            return "failed"
+        return "completed"
 
     async def run(self, ready: asyncio.Event) -> None:
         self._register_room_events()
@@ -207,18 +280,56 @@ class LiveKitRecordReplaySession:
             return
         if signal.type is ProbeSignalType.CAPTURE_STARTED:
             self._attempt.begin_capture(at_ms=self._elapsed_ms())
+        elif signal.type is ProbeSignalType.CAPTURE_STOPPED:
+            self._capture_stopped.set()
+        elif signal.type is ProbeSignalType.REPLAY_ACKNOWLEDGED:
+            self._replay_acknowledged.set()
 
     async def _capture_and_replay(self, track: rtc.Track) -> None:
         frames: list[rtc.AudioFrame] = []
-        stream = rtc.AudioStream(
+        stream = self._audio_stream_factory(
             track,
             sample_rate=SAMPLE_RATE_HZ,
             num_channels=CHANNEL_COUNT,
             frame_size_ms=FRAME_SIZE_MS,
         )
         self._attempt.begin_capture(at_ms=self._elapsed_ms())
+        stop_waiter = asyncio.create_task(self._capture_stopped.wait())
+        drain_deadline: float | None = None
         try:
-            async for event in stream:
+            iterator = stream.__aiter__()
+            while True:
+                if stop_waiter.done():
+                    if drain_deadline is None:
+                        drain_deadline = (
+                            asyncio.get_running_loop().time() + self._capture_drain_seconds
+                        )
+                    remaining_drain = drain_deadline - asyncio.get_running_loop().time()
+                    if remaining_drain <= 0:
+                        break
+                    try:
+                        event = await asyncio.wait_for(
+                            anext(iterator),
+                            timeout=remaining_drain,
+                        )
+                    except (TimeoutError, StopAsyncIteration):
+                        break
+                else:
+                    frame_waiter = asyncio.create_task(anext(iterator))
+                    done, _ = await asyncio.wait(
+                        {frame_waiter, stop_waiter},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if frame_waiter in done:
+                        try:
+                            event = frame_waiter.result()
+                        except StopAsyncIteration:
+                            break
+                    else:
+                        frame_waiter.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await frame_waiter
+                        continue
                 frame = event.frame
                 metadata = AudioFrameMetadata(
                     attempt_id=self._spec.attempt_id,
@@ -240,10 +351,22 @@ class LiveKitRecordReplaySession:
                 if self._attempt.metrics.audio_duration_ms > MAX_CLIP_DURATION_MS:
                     await self._fail("capture exceeded the five-second limit")
                     return
+            if not self._capture_stopped.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._capture_stopped.wait(),
+                        timeout=self._capture_stop_signal_timeout_seconds,
+                    )
+                except TimeoutError:
+                    await self._fail("capture_stopped signal was not received")
+                    return
         except Exception as error:
             await self._fail(f"audio capture failed: {type(error).__name__}")
             return
         finally:
+            stop_waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_waiter
             await stream.aclose()
 
         try:
@@ -270,12 +393,25 @@ class LiveKitRecordReplaySession:
             await source.wait_for_playout()
             self._attempt.complete_replay(at_ms=self._elapsed_ms())
             await self._send_status(ProbeSignalType.REPLAY_COMPLETED)
+            await self._wait_for_replay_acknowledgement()
         except Exception as error:
             await self._fail(f"audio replay failed: {type(error).__name__}")
             return
         finally:
             await source.aclose()
         self._finished.set()
+
+    async def _wait_for_replay_acknowledgement(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._replay_acknowledged.wait(),
+                timeout=self._replay_ack_timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Replay completion was not acknowledged for attempt %s",
+                self._spec.attempt_id,
+            )
 
     async def _fail(self, reason: str) -> None:
         self._attempt.fail(reason, at_ms=self._elapsed_ms())

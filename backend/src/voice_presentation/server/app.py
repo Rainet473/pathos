@@ -54,12 +54,16 @@ def create_app(bootstrap_service: ProbeBootstrapService) -> FastAPI:
 def create_configured_app() -> FastAPI:
     from voice_presentation.adapters.livekit.probe import LiveKitProbeSessionLauncher
     from voice_presentation.adapters.livekit.tokens import LiveKitTokenIssuer
+    from voice_presentation.transport.usage import JsonlUsageLedger
 
     server_url = _required_environment("LIVEKIT_URL")
     api_key = _required_environment("LIVEKIT_API_KEY")
     api_secret = _required_environment("LIVEKIT_API_SECRET")
+    usage_log = os.getenv("LIVEKIT_USAGE_LOG", ".runtime/livekit-usage.jsonl").strip()
+    if not usage_log:
+        raise RuntimeError("LIVEKIT_USAGE_LOG must not be empty")
     issuer = LiveKitTokenIssuer(api_key=api_key, api_secret=api_secret)
-    launcher = LiveKitProbeSessionLauncher()
+    launcher = LiveKitProbeSessionLauncher(usage_ledger=JsonlUsageLedger(usage_log))
     return create_app(
         ProbeBootstrapService(
             server_url=server_url,

@@ -24,7 +24,11 @@ export interface LiveKitProbeCallbacks {
 export interface LiveKitProbeDependencies {
   roomFactory?: () => Room;
   microphoneFactory?: typeof createLocalAudioTrack;
+  sessionTimeoutMs?: number;
 }
+
+const DEFAULT_SESSION_TIMEOUT_MS = 55_000;
+const REPLAY_ACK_TIMEOUT_MS = 500;
 
 export class LiveKitProbeTransport {
   private readonly room: Room;
@@ -34,6 +38,9 @@ export class LiveKitProbeTransport {
   private session: ProbeSessionResponse | null = null;
   private startedAt = 0;
   private disconnectRequested = false;
+  private terminalStatusReceived = false;
+  private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly sessionTimeoutMs: number;
 
   constructor(
     private readonly callbacks: LiveKitProbeCallbacks,
@@ -41,10 +48,14 @@ export class LiveKitProbeTransport {
   ) {
     this.room = dependencies.roomFactory?.() ?? new Room({ adaptiveStream: false, dynacast: false });
     this.microphoneFactory = dependencies.microphoneFactory ?? createLocalAudioTrack;
+    this.sessionTimeoutMs = dependencies.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
+    if (this.sessionTimeoutMs <= 0 || this.sessionTimeoutMs >= 60_000) {
+      throw new Error("probe browser session timeout must be below one minute");
+    }
     this.room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
       if (topic !== CONTROL_TOPIC || !participant?.identity.startsWith("probe-worker-")) return;
       const status = parseStatusPacket(payload);
-      if (status !== null) this.callbacks.onStatus(status);
+      if (status !== null) void this.deliverStatus(status);
     });
     this.room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
       if (participant.identity.startsWith("probe-worker-") && track.kind === Track.Kind.Audio) {
@@ -53,6 +64,11 @@ export class LiveKitProbeTransport {
     });
     this.room.on(RoomEvent.AudioPlaybackStatusChanged, (playing) => {
       if (!playing) this.callbacks.onAudioPlaybackBlocked();
+    });
+    this.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      if (!participant.identity.startsWith("probe-worker-") || this.disconnectRequested) return;
+      if (!this.terminalStatusReceived) this.callbacks.onDisconnected();
+      void this.disconnect();
     });
     this.room.on(RoomEvent.Disconnected, () => {
       this.stopLocalMicrophone();
@@ -68,11 +84,17 @@ export class LiveKitProbeTransport {
 
   async connect(session: ProbeSessionResponse): Promise<void> {
     this.disconnectRequested = false;
+    this.terminalStatusReceived = false;
     this.session = session;
     this.startedAt = performance.now();
     await this.room.connect(session.serverUrl, session.participantToken, {
       autoSubscribe: true,
     });
+    this.sessionTimer = setTimeout(() => {
+      if (this.session === null) return;
+      this.callbacks.onDisconnected();
+      void this.disconnect();
+    }, this.sessionTimeoutMs);
   }
 
   async startCapture(): Promise<void> {
@@ -118,6 +140,10 @@ export class LiveKitProbeTransport {
 
   async disconnect(): Promise<void> {
     this.disconnectRequested = true;
+    if (this.sessionTimer !== null) {
+      clearTimeout(this.sessionTimer);
+      this.sessionTimer = null;
+    }
     this.stopLocalMicrophone();
     for (const element of this.attachedAudio) {
       element.remove();
@@ -137,6 +163,30 @@ export class LiveKitProbeTransport {
     element.style.display = "none";
     document.body.append(element);
     this.attachedAudio.add(element);
+  }
+
+  private async deliverStatus(status: ProbeStatusPacket): Promise<void> {
+    if (status.type === "replay_completed" || status.type === "failed") {
+      this.terminalStatusReceived = true;
+    }
+    this.callbacks.onStatus(status);
+    if (
+      status.type === "replay_completed" &&
+      this.session !== null &&
+      status.attemptId === this.session.attemptId
+    ) {
+      try {
+        await Promise.race([
+          this.room.localParticipant.publishData(
+            createControlPacket("replay_acknowledged", status.attemptId, this.elapsedMs()),
+            { reliable: true, topic: CONTROL_TOPIC },
+          ),
+          new Promise<void>((resolve) => setTimeout(resolve, REPLAY_ACK_TIMEOUT_MS)),
+        ]);
+      } catch {
+        // The terminal status is still actionable if its acknowledgement fails.
+      }
+    }
   }
 
   private requiredSession(): ProbeSessionResponse {

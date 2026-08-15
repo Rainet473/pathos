@@ -17,6 +17,9 @@ A user explicitly starts a transport probe, records a short microphone clip, and
 - The browser chooses a unique `attemptId` for each explicit probe and requests a short-lived room token from `POST /api/probe/sessions`.
 - Bootstrap accepts only a `probe-...` room name, a `browser-...` participant identity and a UUID attempt identifier. It returns the LiveKit server URL and participant token, never API credentials.
 - Browser control signals and Python status signals are reliable LiveKit data packets on the `voice-probe.control.v1` topic.
+- The explicit `capture_stopped` control signal is the semantic clip boundary. Track end-of-stream alone cannot authorize replay. After the signal, Python drains in-flight media against one global deadline; track unpublication remains cleanup.
+- The client surfaces `replay_completed` immediately and sends `replay_acknowledged` best-effort. Python keeps the worker connected until that acknowledgement or a short bounded timeout so its final reliable status is not dropped by immediate disconnect.
+- The browser disconnects when the worker leaves and has an independent sub-minute safety timeout, preventing an idle completed page from accruing open-ended connection minutes.
 - Every signal carries `version: 1`, `type`, `attemptId` and a monotonic client-relative timestamp. Status signals may add frame count, sample count and audio duration.
 - Microphone and replay tracks use 48 kHz mono PCM at the Python boundary. Individual accepted frames must be non-empty and no longer than 100 ms.
 - Audio itself travels as a LiveKit media track. Data packets coordinate start/stop/status only; they are not an alternate audio upload path.
@@ -78,8 +81,8 @@ failed ── new explicit attempt → capturing
 
 ## Exit criteria
 
-- [ ] Tests were written before transport implementation.
-- [ ] New tests were observed failing for the intended reason.
-- [ ] Deterministic transport-boundary tests pass offline.
+- [x] Tests were written before transport implementation.
+- [x] New tests were observed failing for the intended reason.
+- [x] Deterministic transport-boundary tests pass offline.
 - [ ] Five live observation attempts were run and evidence was recorded.
-- [ ] Deferred codec and network risks are explicit.
+- [x] Deferred codec and network risks are explicit.

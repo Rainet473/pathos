@@ -138,6 +138,22 @@ def test_control_signal_has_a_versioned_camel_case_wire_shape():
 
 
 @pytest.mark.offline
+def test_replay_acknowledgement_is_a_supported_control_signal():
+    from voice_presentation.transport.contracts import ProbeControlSignal, ProbeSignalType
+
+    signal = ProbeControlSignal.model_validate_json(
+        """{
+          "version": 1,
+          "type": "replay_acknowledged",
+          "attemptId": "attempt-1",
+          "emittedAtMs": 1235
+        }"""
+    )
+
+    assert signal.type is ProbeSignalType.REPLAY_ACKNOWLEDGED
+
+
+@pytest.mark.offline
 @pytest.mark.parametrize(
     "payload",
     [

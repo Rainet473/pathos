@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
-import type { LocalAudioTrack, Room } from "livekit-client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { RoomEvent, type LocalAudioTrack, type Room } from "livekit-client";
 
 import { LiveKitProbeTransport } from "./livekitTransport";
+import { CONTROL_TOPIC } from "./protocol";
 
 class FakeRoom {
   handlers = new Map<string, (...args: unknown[]) => void>();
@@ -9,10 +10,15 @@ class FakeRoom {
   startAudioCalls = 0;
   unpublishCalls = 0;
   publishDataCalls = 0;
+  publishedData: Uint8Array[] = [];
+  disconnectCalls = 0;
+  hangPublishData = false;
   localParticipant = {
     publishTrack: async () => undefined,
-    publishData: async () => {
+    publishData: async (payload: Uint8Array) => {
       this.publishDataCalls += 1;
+      this.publishedData.push(payload);
+      if (this.hangPublishData) await new Promise(() => undefined);
       if (this.publishDataCalls === 2) throw new Error("control channel failed");
     },
     unpublishTrack: async () => {
@@ -27,7 +33,9 @@ class FakeRoom {
 
   async connect() {}
 
-  async disconnect() {}
+  async disconnect() {
+    this.disconnectCalls += 1;
+  }
 
   async startAudio() {
     this.startAudioCalls += 1;
@@ -36,6 +44,150 @@ class FakeRoom {
 }
 
 describe("LiveKit probe transport", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("exposes replay completion immediately while acknowledgement is best-effort", async () => {
+    const room = new FakeRoom();
+    const observed: string[] = [];
+    const transport = new LiveKitProbeTransport(
+      {
+        onStatus: (status) => observed.push(status.type),
+        onDisconnected: () => undefined,
+        onAudioPlaybackBlocked: () => undefined,
+      },
+      { roomFactory: () => room as unknown as Room },
+    );
+    await transport.connect({
+      attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+      roomName: "probe-9ea3a1cb",
+      participantIdentity: "browser-9ea3a1cb",
+      serverUrl: "wss://example.livekit.cloud",
+      participantToken: "participant-token",
+    });
+
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          type: "replay_completed",
+          attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+          emittedAtMs: 500,
+          metrics: { frameCount: 25, audioDurationMs: 500 },
+        }),
+      ),
+      { identity: "probe-worker-9ea3a1cb" },
+      undefined,
+      CONTROL_TOPIC,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(room.publishDataCalls).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(room.publishedData[0]))).toMatchObject({
+      type: "replay_acknowledged",
+      attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+    });
+    expect(observed).toEqual(["replay_completed"]);
+  });
+
+  it("does not hold terminal UI state behind a stalled acknowledgement", async () => {
+    const room = new FakeRoom();
+    room.hangPublishData = true;
+    const observed: string[] = [];
+    const transport = new LiveKitProbeTransport(
+      {
+        onStatus: (status) => observed.push(status.type),
+        onDisconnected: () => undefined,
+        onAudioPlaybackBlocked: () => undefined,
+      },
+      { roomFactory: () => room as unknown as Room },
+    );
+    await transport.connect({
+      attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+      roomName: "probe-9ea3a1cb",
+      participantIdentity: "browser-9ea3a1cb",
+      serverUrl: "wss://example.livekit.cloud",
+      participantToken: "participant-token",
+    });
+
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          type: "replay_completed",
+          attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+          emittedAtMs: 500,
+        }),
+      ),
+      { identity: "probe-worker-9ea3a1cb" },
+      undefined,
+      CONTROL_TOPIC,
+    );
+
+    expect(observed).toEqual(["replay_completed"]);
+  });
+
+  it("caps the browser connection below one billing minute", async () => {
+    vi.useFakeTimers();
+    const room = new FakeRoom();
+    let disconnected = 0;
+    const transport = new LiveKitProbeTransport(
+      {
+        onStatus: () => undefined,
+        onDisconnected: () => {
+          disconnected += 1;
+        },
+        onAudioPlaybackBlocked: () => undefined,
+      },
+      {
+        roomFactory: () => room as unknown as Room,
+        sessionTimeoutMs: 10,
+      },
+    );
+    await transport.connect({
+      attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+      roomName: "probe-9ea3a1cb",
+      participantIdentity: "browser-9ea3a1cb",
+      serverUrl: "wss://example.livekit.cloud",
+      participantToken: "participant-token",
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(disconnected).toBe(1);
+    expect(room.disconnectCalls).toBe(1);
+  });
+
+  it("disconnects promptly and reports failure if the worker leaves pre-terminal", async () => {
+    const room = new FakeRoom();
+    let disconnected = 0;
+    const transport = new LiveKitProbeTransport(
+      {
+        onStatus: () => undefined,
+        onDisconnected: () => {
+          disconnected += 1;
+        },
+        onAudioPlaybackBlocked: () => undefined,
+      },
+      { roomFactory: () => room as unknown as Room },
+    );
+    await transport.connect({
+      attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+      roomName: "probe-9ea3a1cb",
+      participantIdentity: "browser-9ea3a1cb",
+      serverUrl: "wss://example.livekit.cloud",
+      participantToken: "participant-token",
+    });
+
+    room.handlers.get(RoomEvent.ParticipantDisconnected)?.({
+      identity: "probe-worker-9ea3a1cb",
+    });
+    await Promise.resolve();
+
+    expect(disconnected).toBe(1);
+    expect(room.disconnectCalls).toBe(1);
+  });
+
   it("treats blocked gesture-time audio priming as an event-driven recovery", async () => {
     const room = new FakeRoom();
     room.startAudioError = new Error("playback blocked");
