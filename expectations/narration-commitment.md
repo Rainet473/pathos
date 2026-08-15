@@ -68,6 +68,6 @@ last beat --matching playout completed--> completed
 
 - [x] Tests were written before implementation.
 - [x] New tests were observed failing for the intended reason.
-- [ ] Deterministic suite passes offline.
+- [x] Deterministic suite passes offline.
 - [x] Live concept-coverage observations are deferred to the real-provider slice.
 - [x] Runtime capability mismatch remains explicit.

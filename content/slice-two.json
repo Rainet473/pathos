@@ -1,0 +1,45 @@
+{
+  "id": "motorcycle-controls-slice-two",
+  "title": "How a Motorcycle Responds to Your Controls",
+  "slides": [
+    {
+      "id": "engine-braking",
+      "title": "Engine Braking",
+      "objective": "Explain why closing the throttle can slow the motorcycle.",
+      "headline": "Low gears make engine braking feel stronger.",
+      "labels": [
+        "closed throttle",
+        "drivetrain resistance",
+        "gear ratio"
+      ],
+      "visual_description": "A simple flow from a closed throttle through drivetrain resistance to rear-wheel deceleration.",
+      "assets": [],
+      "beats": [
+        {
+          "id": "low-gear-effect",
+          "summary": "Closing the throttle lets the moving motorcycle turn the engine through the drivetrain, and a lower gear makes that resistance feel stronger.",
+          "narration_guidance": "Connect the stronger low-gear sensation to the gear ratio without implying that the wheel brakes are applied.",
+          "required_concepts": [
+            "drivetrain resistance",
+            "gear ratio",
+            "stronger low-gear effect"
+          ]
+        }
+      ],
+      "deep_dive": [
+        {
+          "concept": "low gear engine braking",
+          "explanation": "At the same road speed, a lower gear makes the engine turn faster. When the throttle is closed, that ratio couples more engine resistance back to the rear wheel, so the slowing effect feels stronger.",
+          "caveats": [
+            "Available tyre grip still limits deceleration.",
+            "An abrupt downshift can unsettle the rear wheel."
+          ]
+        }
+      ],
+      "related_terms": [
+        "slipper clutch",
+        "back torque"
+      ]
+    }
+  ]
+}

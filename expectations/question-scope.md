@@ -69,6 +69,6 @@ question
 
 - [x] Tests were written before implementation.
 - [x] New tests were observed failing for the intended reason.
-- [ ] Deterministic classification fixtures pass offline.
+- [x] Deterministic classification fixtures pass offline.
 - [x] Live response-quality observations are deferred with a fixed rubric.
 - [x] Retrieval limitations are explicit.

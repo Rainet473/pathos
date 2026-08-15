@@ -72,6 +72,6 @@ presenting(active beat B)
 
 - [x] Tests were written before implementation.
 - [x] New tests were observed failing for the intended reason.
-- [ ] Deterministic suite passes offline.
+- [x] Deterministic suite passes offline.
 - [x] Acoustic observations are deferred with a repeatable rubric.
 - [x] Reconnect policy remains an explicit MVP limitation until its slice.
