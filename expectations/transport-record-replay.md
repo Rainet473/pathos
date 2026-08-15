@@ -84,5 +84,5 @@ failed ── new explicit attempt → capturing
 - [x] Tests were written before transport implementation.
 - [x] New tests were observed failing for the intended reason.
 - [x] Deterministic transport-boundary tests pass offline.
-- [ ] Five live observation attempts were run and evidence was recorded.
+- [x] Five live observation attempts were run and evidence was recorded.
 - [x] Deferred codec and network risks are explicit.

@@ -35,8 +35,8 @@ user gesture -> browser microphone -> LiveKit room -> Python probe participant
 
 ## Exit gate
 
-- [ ] Observable path succeeds five consecutive times.
-- [ ] A mid-capture disconnect fails visibly and a new attempt recovers.
+- [x] Observable path succeeds five consecutive times.
+- [x] A mid-capture disconnect fails visibly and a new attempt recovers.
 - [x] Slice 1 deterministic tests pass; Slice 0's intentionally red domain oracle remains unchanged.
 - [x] Logs, screenshot/recording status and limitations are recorded below.
 
@@ -88,15 +88,48 @@ The browser-control surface had no available browser instance, so the two creden
 - If the project began with the current 5,000-minute free WebRTC allowance and had no prior usage, the local estimate leaves 4,996 minutes. This is not the authoritative account balance; prior usage must come from the LiveKit dashboard.
 - The first observation produced the deterministic `capture_stopped` bounded-drain regression. The second showed that worker completion succeeded but the final status could be lost on immediate disconnect, producing the `replay_acknowledged` handshake regression.
 - Both regressions pass offline. The handshake was deliberately not re-run against Cloud in this session, keeping consumption at the announced two-attempt cap.
-- The five spoken clips, human intelligibility judgement, screenshot/recording and disconnect/recovery observation remain open.
+- The five spoken clips, human intelligibility judgement, screenshot and disconnect/recovery observations were completed in the manual gate below.
+
+### Completed manual browser gate: 16 August 2026
+
+Result: five consecutive spoken clips replayed intelligibly and exactly once
+through the browser-to-Python LiveKit path. A network disconnect during capture
+produced an obvious failure, and a fresh attempt after restoring the network
+succeeded without restarting the backend.
+
+- Local ledger baseline before this gate: 6 attempts and 12 participant-minutes upper bound.
+- Maximum new attempts: 7 (five consecutive successes, one forced disconnect and one recovery).
+- Conservative incremental cap: 21 participant-minutes, allowing up to 3 per attempt for worker startup/timeout rounding plus the capped browser participant.
+- Provider scope: LiveKit WebRTC only. LiveKit Inference, Google AI and OpenAI model calls remain zero.
+- Retained seven-attempt sequence: six completed and one deliberately failed, adding 14 participant-minutes—inside the announced 21-minute cap.
+- Six unretained setup/retry attempts occurred between the baseline and retained sequence: four completed and two failed, adding another 13 participant-minutes. They count toward usage but not toward the acoustic acceptance claim.
+- Post-gate local ledger: 19 attempts and 39 participant-minutes upper bound. This is not the authoritative LiveKit account balance.
+- The deliberate disconnect surfaced `LiveKit room disconnected.` after 47.085 seconds. The backend was not restarted, and the following attempt completed normally.
+
+The operator used short numbered phrases and retained screenshots of the
+successful sequence, visible failure and recovery. The evidence rows are below.
+
+| Run | Role | Attempt ID | Final phase | Frames | Captured seconds | Intelligible once? | Notes |
+|---:|---|---|---|---:|---:|---|---|
+| 1 | consecutive clip | `7589606b-8ae3-4a5e-b36e-f3aec15be188` | complete | 169 | 3.38 | yes | Screenshot and evaluator confirmation |
+| 2 | consecutive clip | `ecbdc862-5564-4ab8-aa7a-47b0e6cb3b33` | complete | 161 | 3.22 | yes | Screenshot and evaluator confirmation |
+| 3 | consecutive clip | `de26c4fa-0b84-436c-8480-ad9bb5ff0b71` | complete | 177 | 3.54 | yes | Screenshot and evaluator confirmation |
+| 4 | consecutive clip | `6b3f306a-d395-4dee-a320-91426243189c` | complete | 186 | 3.72 | yes | Screenshot captured replaying; completion evaluator-confirmed and ledger-confirmed |
+| 5 | consecutive clip | `44c641fc-4b0f-47cb-8ecb-4d7b91be88c2` | complete | 133 | 2.66 | yes | Screenshot and evaluator confirmation |
+| 6 | forced disconnect | `a02242bb-35bf-4a8e-b543-abf33f1cc037` | failure | n/a | n/a | n/a | Visible `LiveKit room disconnected.` |
+| 7 | recovery clip | `c05c3e46-dfd2-464f-8b6e-f4698933ede6` | complete | 161 | 3.22 | yes | Screenshot; backend not restarted |
+
+The six successful clips total 987 received frames and 19.74 seconds of
+captured audio. The evaluator reported every clip intelligible and played once,
+with no feedback loop. Screenshots are retained in the evaluation conversation,
+not copied into the repository; no independent audio recording was retained.
 
 ## Advancement decision
 
-Slice 1 is not labelled complete: its human browser/acoustic and recovery gates
-remain open and must be run before release. The real Cloud observations do,
-however, establish bidirectional media transport and expose the lifecycle races
-now covered offline. Because Slice 2 introduces no provider or transport
-dependency, work may advance to the deterministic fake product while these
-manual Slice 1 gates remain explicitly tracked. Slice 2 results must not be used
-to claim that browser microphone intelligibility or acoustic interruption has
-passed.
+Slice 1 is complete. The real Cloud observations, the five consecutive spoken
+clips, the visible disconnect and the successful fresh attempt establish the
+bidirectional browser-to-Python transport and its required recovery behavior.
+This remains a transport-only result: it does not prove model voice quality,
+semantic interruption behavior or narration-beat commitment through a real
+provider. The local ledger is an upper bound for this repository's observed
+attempts, not an authoritative account-wide usage balance.
