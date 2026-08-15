@@ -219,3 +219,16 @@ __marimo__/
 
 # Private planning material
 voice_presentation_handoff/
+
+# Local configuration and generated artifacts
+.env
+.env.*
+!.env.example
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+*.egg-info/
+__pycache__/
+.pytest_cache/

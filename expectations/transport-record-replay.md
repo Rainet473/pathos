@@ -12,6 +12,15 @@ A user explicitly starts a transport probe, records a short microphone clip, and
 - Preconditions: headphones, network access, valid LiveKit configuration and an explicit user gesture.
 - Non-goals: acoustic quality scoring, model interaction, VAD tuning, presentation state and simultaneous live self-echo.
 
+### Attempt-scoped wire contract
+
+- The browser chooses a unique `attemptId` for each explicit probe and requests a short-lived room token from `POST /api/probe/sessions`.
+- Bootstrap accepts only a `probe-...` room name, a `browser-...` participant identity and a UUID attempt identifier. It returns the LiveKit server URL and participant token, never API credentials.
+- Browser control signals and Python status signals are reliable LiveKit data packets on the `voice-probe.control.v1` topic.
+- Every signal carries `version: 1`, `type`, `attemptId` and a monotonic client-relative timestamp. Status signals may add frame count, sample count and audio duration.
+- Microphone and replay tracks use 48 kHz mono PCM at the Python boundary. Individual accepted frames must be non-empty and no longer than 100 ms.
+- Audio itself travels as a LiveKit media track. Data packets coordinate start/stop/status only; they are not an alternate audio upload path.
+
 ## Behavior map
 
 ```text
@@ -39,6 +48,8 @@ failed ── new explicit attempt → capturing
 | Malformed sample metadata | Rejected before publication | Automated |
 | Duplicate stop event | One finalized attempt and one replay at most | Automated |
 | Disconnect during capture | Visible failure followed by a successful new attempt | Automated plus observation |
+| Late status from an old attempt | Current UI state and metrics do not change | Automated |
+| Token bootstrap | Invalid room/identity is rejected and the response contains no API secret | Automated |
 
 ## Edge and race cases
 
@@ -49,6 +60,7 @@ failed ── new explicit attempt → capturing
 - Partial failure: browser publishes while Python cannot return audio, or returned track exists but cannot autoplay.
 - Recovery: reconnect creates a new attempt ID and clears stale transport state.
 - Capability mismatch: codec resampling changes bytes or sample rate while preserving intelligible duration.
+- Security: browser grants are room-scoped, time-limited, and limited to microphone/data publish plus subscription.
 
 ## Observation rubric
 

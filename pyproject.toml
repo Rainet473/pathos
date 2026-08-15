@@ -8,12 +8,17 @@ version = "0.1.0"
 description = "An interruptible, stateful AI voice presentation"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "pydantic==2.13.4",
+  "fastapi==0.139.2",
+  "livekit==1.1.14",
+  "livekit-api==1.2.0",
+  "pydantic==2.13.4",
+  "uvicorn[standard]==0.51.0",
 ]
 
 [project.optional-dependencies]
 test = [
-    "pytest==9.1.1",
+  "httpx2==2.9.0",
+  "pytest==9.1.1",
 ]
 
 [tool.setuptools.packages.find]
