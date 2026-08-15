@@ -215,7 +215,7 @@ def create_configured_app() -> FastAPI:
                 diagnostic_ledger=JsonlConversationDiagnosticLedger(
                     diagnostics_log
                 ),
-                presentation_session_factory=_slice_four_presentation_session,
+                presentation_session_factory=_live_presentation_session,
             ),
             instructions=APPLICATION_PRESENTATION_INSTRUCTIONS,
         )
@@ -238,12 +238,19 @@ def _slice_two_fake_store() -> FakeSessionStore:
     return FakeSessionStore(_slice_two_deck())
 
 
-def _slice_four_presentation_session(session_id: str):
+def _live_presentation_session(session_id: str):
     from voice_presentation.application.live_presentation import (
         ApplicationPresentationSession,
     )
 
-    return ApplicationPresentationSession(_slice_two_deck(), session_id=session_id)
+    return ApplicationPresentationSession(_full_deck(), session_id=session_id)
+
+
+def _full_deck():
+    repository_root = Path(__file__).resolve().parents[4]
+    return JsonMaterialRepository(
+        repository_root / "content" / "motorcycle-controls.json"
+    ).load()
 
 
 def _slice_two_deck():

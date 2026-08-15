@@ -96,6 +96,24 @@ class PresentationController:
             ),
         )
 
+    def select_narration(self, *, turn_id: str) -> tuple[DomainEvent, ...]:
+        turn_id = self._turn_id(turn_id)
+        self._require_phase("select_narration", PresentationPhase.PRESENTING)
+        if (
+            self.state.active_playout is not None
+            or self.state.active_turn_id is not None
+        ):
+            self._reject("select_narration", ("no_active_turn",))
+        self.state.active_turn_id = turn_id
+        self._advance_version()
+        return (
+            DomainEvent(
+                type=DomainEventType.BEAT_SELECTED,
+                cursor=self.state.presentation_cursor,
+                turn_id=turn_id,
+            ),
+        )
+
     def playout_completed(
         self, *, turn_id: str, cursor: Cursor
     ) -> tuple[DomainEvent, ...]:

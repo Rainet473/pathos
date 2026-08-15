@@ -10,6 +10,7 @@ from voice_presentation.domain.contracts import (
     ContinuationPreference,
     Cursor,
     PlayoutPurpose,
+    PresentationPhase,
     PresentationState,
     ScopeMode,
 )
@@ -191,6 +192,12 @@ class FakePresentationSession:
             )
             if any(event.type is DomainEventType.BEAT_COMMITTED for event in events):
                 self._committed_beats.append(active.cursor)
+            if self._controller.state.phase is PresentationPhase.PRESENTING:
+                next_turn_id = self._next_turn_id("narration")
+                events.extend(
+                    self._controller.select_narration(turn_id=next_turn_id)
+                )
+                events.extend(self._start_narration_playout(next_turn_id))
             return self._finish_action(events)
 
         resume_turn_id = None

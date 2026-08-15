@@ -70,10 +70,13 @@ class PresentationDeck(BaseModel):
     slides: tuple[PresentationSlide, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def slide_ids_are_unique(self) -> "PresentationDeck":
+    def semantic_ids_are_unique(self) -> "PresentationDeck":
         slide_ids = [slide.id for slide in self.slides]
         if len(set(slide_ids)) != len(slide_ids):
             raise ValueError("duplicate slide id")
+        beat_ids = [beat.id for slide in self.slides for beat in slide.beats]
+        if len(set(beat_ids)) != len(beat_ids):
+            raise ValueError("duplicate beat id")
         return self
 
     def slide(self, slide_id: str) -> PresentationSlide:

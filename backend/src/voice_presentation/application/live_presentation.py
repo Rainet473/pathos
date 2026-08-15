@@ -137,10 +137,21 @@ class ApplicationPresentationSession:
                 turn_id=turn_id,
                 cursor=directive.cursor,
             )
-            if any(event.type is DomainEventType.BEAT_COMMITTED for event in events):
+            beat_committed = any(
+                event.type is DomainEventType.BEAT_COMMITTED for event in events
+            )
+            if beat_committed:
                 if directive.cursor not in self._committed_beats:
                     self._committed_beats.append(directive.cursor)
-            return self._finish(events)
+            if (
+                not beat_committed
+                or self._controller.state.phase is not PresentationPhase.PRESENTING
+            ):
+                return self._finish(events)
+            next_turn_id = self._next_turn_id("narration")
+            events += self._controller.select_narration(turn_id=next_turn_id)
+            generation = self._narration_directive(next_turn_id)
+            return self._finish(events, generation=generation)
 
         resume_turn_id: str | None = None
         if (
