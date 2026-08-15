@@ -20,6 +20,10 @@ import {
   parsePresentationStateUpdate,
   type PresentationStateUpdate,
 } from "./presentation";
+import {
+  CONVERSATION_TRANSCRIPT_TOPIC,
+  parseConversationTranscriptUpdate,
+} from "./transcript";
 
 export interface LiveKitConversationCallbacks {
   onConnected: (backend: VoiceBackendIdentity) => void;
@@ -57,6 +61,7 @@ export class LiveKitConversationTransport {
   private disconnectRequested = false;
   private disconnected = false;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTranscriptSequence = 0;
 
   constructor(
     private readonly callbacks: LiveKitConversationCallbacks,
@@ -91,25 +96,6 @@ export class LiveKitConversationTransport {
         this.callbacks.onLocalSpeechWhileAgentSpeaking();
       }
     });
-    this.room.on(RoomEvent.TranscriptionReceived, (segments, participant) => {
-      if (this.session === null || participant === undefined) return;
-      const role = participant.identity.startsWith("voice-worker-")
-        ? "agent"
-        : participant.identity === this.session.participantIdentity
-          ? "user"
-          : null;
-      if (role === null) return;
-      for (const segment of segments) {
-        const text = segment.text.trim();
-        if (!text) continue;
-        this.callbacks.onTranscript({
-          id: segment.id,
-          role,
-          text,
-          final: segment.final,
-        });
-      }
-    });
     this.room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
       if (
         this.session === null ||
@@ -120,6 +106,17 @@ export class LiveKitConversationTransport {
         const event = parseConversationDiagnosticEvent(payload);
         if (event === null || event.attemptId !== this.session.attemptId) return;
         this.callbacks.onDiagnostic(event);
+        return;
+      }
+      if (topic === CONVERSATION_TRANSCRIPT_TOPIC) {
+        const update = parseConversationTranscriptUpdate(payload);
+        if (
+          update === null ||
+          update.attemptId !== this.session.attemptId ||
+          update.sequence <= this.lastTranscriptSequence
+        ) return;
+        this.lastTranscriptSequence = update.sequence;
+        this.callbacks.onTranscript(update.entry);
         return;
       }
       if (topic === PRESENTATION_STATE_TOPIC) {
@@ -148,6 +145,7 @@ export class LiveKitConversationTransport {
 
   async connect(session: LiveSessionResponse): Promise<void> {
     this.session = session;
+    this.lastTranscriptSequence = 0;
     this.disconnectRequested = false;
     this.disconnected = false;
     await this.room.connect(session.serverUrl, session.participantToken, {
@@ -206,6 +204,7 @@ export class LiveKitConversationTransport {
       await this.room.disconnect();
     } finally {
       this.session = null;
+      this.lastTranscriptSequence = 0;
     }
   }
 

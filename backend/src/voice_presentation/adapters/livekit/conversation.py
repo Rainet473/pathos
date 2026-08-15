@@ -30,6 +30,11 @@ from voice_presentation.transport.presentation import (
     PresentationCommand,
     PresentationStateUpdate,
 )
+from voice_presentation.transport.transcript import (
+    CONVERSATION_TRANSCRIPT_TOPIC,
+    ConversationTranscriptEntry,
+    ConversationTranscriptUpdate,
+)
 from voice_presentation.voice.sessions import VoiceBackendIdentity, VoiceSessionFactory
 
 logger = logging.getLogger(__name__)
@@ -277,6 +282,12 @@ class LiveKitConversationSession:
             ledger=diagnostic_ledger,
         )
         self._diagnostic_tasks: set[asyncio.Task[None]] = set()
+        self._transcript_tasks: set[asyncio.Task[None]] = set()
+        self._transcript_tail: asyncio.Task[None] | None = None
+        self._transcript_sequence = 0
+        self._user_transcript_sequence = 0
+        self._agent_transcript_sequence = 0
+        self._active_user_transcript_id: str | None = None
         self._presentation_tasks: set[asyncio.Task[None]] = set()
         self._presentation_lock = asyncio.Lock()
         self._presentation_started = False
@@ -333,6 +344,10 @@ class LiveKitConversationSession:
                         await asyncio.gather(
                             *self._diagnostic_tasks, return_exceptions=True
                         )
+                    if self._transcript_tasks:
+                        await asyncio.gather(
+                            *self._transcript_tasks, return_exceptions=True
+                        )
                     if self._agent_session is not None:
                         with contextlib.suppress(Exception):
                             await self._agent_session.aclose()
@@ -384,6 +399,52 @@ class LiveKitConversationSession:
                 self._finished.set()
 
     def _register_agent_events(self, agent_session: object) -> None:
+        @agent_session.on("user_input_transcribed")
+        def on_user_input_transcribed(event: object) -> None:
+            text = str(getattr(event, "transcript", "")).strip()
+            is_final = bool(getattr(event, "is_final", False))
+            if not text:
+                if is_final:
+                    self._active_user_transcript_id = None
+                return
+            if self._active_user_transcript_id is None:
+                self._user_transcript_sequence += 1
+                self._active_user_transcript_id = (
+                    f"user-{self._user_transcript_sequence}"
+                )
+            entry = ConversationTranscriptEntry(
+                id=self._active_user_transcript_id,
+                role="user",
+                text=text,
+                final=is_final,
+            )
+            self._queue_transcript(entry)
+            if is_final:
+                self._active_user_transcript_id = None
+
+        @agent_session.on("conversation_item_added")
+        def on_conversation_item_added(event: object) -> None:
+            item = getattr(event, "item", None)
+            if item is None or str(getattr(item, "role", "")) != "assistant":
+                return
+            text = str(getattr(item, "text_content", "")).strip()
+            if not text:
+                return
+            provider_id = str(getattr(item, "id", "") or "").strip()
+            if provider_id:
+                entry_id = f"agent-{provider_id}"
+            else:
+                self._agent_transcript_sequence += 1
+                entry_id = f"agent-{self._agent_transcript_sequence}"
+            self._queue_transcript(
+                ConversationTranscriptEntry(
+                    id=entry_id,
+                    role="agent",
+                    text=text,
+                    final=True,
+                )
+            )
+
         @agent_session.on("user_state_changed")
         def on_user_state_changed(event: object) -> None:
             diagnostic = self._diagnostics.record_user_state(
@@ -431,6 +492,25 @@ class LiveKitConversationSession:
         task = asyncio.create_task(self._publish_diagnostic(event))
         self._diagnostic_tasks.add(task)
         task.add_done_callback(self._diagnostic_tasks.discard)
+
+    def _queue_transcript(self, entry: ConversationTranscriptEntry) -> None:
+        self._transcript_sequence += 1
+        update = ConversationTranscriptUpdate.from_entry(
+            attempt_id=self._spec.attempt_id,
+            sequence=self._transcript_sequence,
+            entry=entry,
+        )
+        previous = self._transcript_tail
+
+        async def publish_after_previous() -> None:
+            if previous is not None:
+                await asyncio.gather(previous, return_exceptions=True)
+            await self._publish_transcript(update)
+
+        task = asyncio.create_task(publish_after_previous())
+        self._transcript_tail = task
+        self._transcript_tasks.add(task)
+        task.add_done_callback(self._transcript_tasks.discard)
 
     def _queue_presentation(self, awaitable: Awaitable[None]) -> None:
         task = asyncio.create_task(awaitable)
@@ -603,6 +683,23 @@ class LiveKitConversationSession:
         except Exception:
             logger.warning(
                 "Could not publish conversation diagnostic event",
+                exc_info=True,
+            )
+
+    async def _publish_transcript(
+        self,
+        update: ConversationTranscriptUpdate,
+    ) -> None:
+        try:
+            await self._room.local_participant.publish_data(
+                update.to_json(),
+                reliable=True,
+                destination_identities=[self._spec.browser_identity],
+                topic=CONVERSATION_TRANSCRIPT_TOPIC,
+            )
+        except Exception:
+            logger.warning(
+                "Could not publish conversation transcript",
                 exc_info=True,
             )
 

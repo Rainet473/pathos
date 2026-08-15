@@ -5,6 +5,7 @@ import { LiveKitConversationTransport } from "./livekitTransport";
 import { CONVERSATION_DIAGNOSTICS_TOPIC } from "./diagnostics";
 import { PRESENTATION_STATE_TOPIC } from "./presentation";
 import type { LiveSessionResponse } from "./protocol";
+import { CONVERSATION_TRANSCRIPT_TOPIC } from "./transcript";
 
 class FakeMicrophone {
   stopped = false;
@@ -140,10 +141,6 @@ describe("LiveKit conversation transport", () => {
     room.handlers.get(RoomEvent.ActiveSpeakersChanged)?.([
       { identity: session.participantIdentity },
     ]);
-    room.handlers.get(RoomEvent.TranscriptionReceived)?.(
-      [{ id: "turn-1", text: "hello", final: true }],
-      { identity: session.participantIdentity },
-    );
     room.handlers.get(RoomEvent.DataReceived)?.(
       new TextEncoder().encode(JSON.stringify({
         version: 1,
@@ -168,10 +165,6 @@ describe("LiveKit conversation transport", () => {
     expect(events).toContainEqual(["state", "speaking"]);
     expect(events).toContainEqual(["interrupted", null]);
     expect(events).toContainEqual([
-      "transcript",
-      { id: "turn-1", role: "user", text: "hello", final: true },
-    ]);
-    expect(events).toContainEqual([
       "diagnostic",
       {
         version: 1,
@@ -184,6 +177,47 @@ describe("LiveKit conversation transport", () => {
     ]);
     expect(events).toContainEqual(["presentation", presentation]);
 
+    await transport.disconnect();
+  });
+
+  it("accepts only newer current-attempt transcript packets from the worker", async () => {
+    const { room, events, transport } = setup();
+    await transport.connect(session);
+    const worker = { identity: "voice-worker-9ea3a1cb" };
+    const stranger = { identity: "other-participant" };
+    const packet = (sequence: number, attemptId = session.attemptId) =>
+      new TextEncoder().encode(JSON.stringify({
+        version: 1,
+        attemptId,
+        sequence,
+        emittedAt: "2026-08-16T08:30:00Z",
+        entry: {
+          id: "user-1",
+          role: "user",
+          text: sequence === 2 ? "final question" : "late partial",
+          final: sequence === 2,
+        },
+      }));
+
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      packet(2), worker, undefined, CONVERSATION_TRANSCRIPT_TOPIC,
+    );
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      packet(1), worker, undefined, CONVERSATION_TRANSCRIPT_TOPIC,
+    );
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      packet(3, "other-attempt"), worker, undefined, CONVERSATION_TRANSCRIPT_TOPIC,
+    );
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      packet(4), stranger, undefined, CONVERSATION_TRANSCRIPT_TOPIC,
+    );
+
+    expect(events.filter(([type]) => type === "transcript")).toEqual([
+      [
+        "transcript",
+        { id: "user-1", role: "user", text: "final question", final: true },
+      ],
+    ]);
     await transport.disconnect();
   });
 
