@@ -173,6 +173,7 @@ class PresentationController:
             "begin_answer",
             PresentationPhase.INTERRUPTED,
             PresentationPhase.WAITING,
+            PresentationPhase.COMPLETED,
         )
         continuation_preference = ContinuationPreference(continuation_preference)
         if question_slide_id is not None:
@@ -181,6 +182,8 @@ class PresentationController:
             except ValueError as error:
                 raise TransitionRejected(str(error)) from error
 
+        if self.state.answer_return_phase is None:
+            self.state.answer_return_phase = self.state.phase
         self.state.phase = PresentationPhase.ANSWERING
         self.state.active_turn_id = turn_id
         self.state.continuation_preference = continuation_preference
@@ -213,8 +216,14 @@ class PresentationController:
             return self._stale(turn_id)
 
         preference = self.state.continuation_preference
+        returns_to_completed = (
+            self.state.answer_return_phase is PresentationPhase.COMPLETED
+        )
         normalized_resume_turn_id: str | None = None
-        if preference is ContinuationPreference.CONTINUE_AFTER_ANSWER:
+        if (
+            preference is ContinuationPreference.CONTINUE_AFTER_ANSWER
+            and not returns_to_completed
+        ):
             if resume_turn_id is None:
                 raise TransitionRejected(
                     "answer_completed requires resume_turn_id when continuation is authorized"
@@ -231,13 +240,18 @@ class PresentationController:
         self.state.active_playout = None
         self.state.active_turn_id = None
 
-        if preference is ContinuationPreference.CONTINUE_AFTER_ANSWER:
+        if returns_to_completed:
+            self.state.phase = PresentationPhase.COMPLETED
+            self.state.continuation_preference = None
+            self.state.answer_return_phase = None
+        elif preference is ContinuationPreference.CONTINUE_AFTER_ANSWER:
             assert normalized_resume_turn_id is not None
             resume_cursor = self.state.interrupted_cursor or self.state.presentation_cursor
             events.extend(self._restore_slide_events(resume_cursor))
             self.state.phase = PresentationPhase.PRESENTING
             self.state.active_turn_id = normalized_resume_turn_id
             self.state.continuation_preference = None
+            self.state.answer_return_phase = None
             events.extend(
                 (
                     DomainEvent(
@@ -253,6 +267,7 @@ class PresentationController:
             )
         else:
             self.state.phase = PresentationPhase.WAITING
+            self.state.answer_return_phase = None
             events.append(DomainEvent(type=DomainEventType.PRESENTATION_WAITING))
 
         self._advance_version()

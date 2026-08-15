@@ -347,3 +347,70 @@ def test_bridge_answer_and_continue_schedules_same_beat_with_new_turn():
         await asyncio.wait_for(task, timeout=0.1)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_bridge_answers_question_received_just_after_presentation_completion():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        agent_constructor = RecordingPresentationAgentConstructor()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=_application_session(),
+            presentation_agent_constructor=agent_constructor,
+            http_context_factory=NullAsyncContext,
+            session_timeout_seconds=1,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = type("Participant", (), {"identity": _spec().browser_identity})()
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+        narration_handle.finish()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert _updates(room)[-1].view.state.phase is PresentationPhase.COMPLETED
+
+        prepare_user_turn = agent_constructor.calls[0]["prepare_user_turn"]
+        answer_instructions = await prepare_user_turn(
+            "How does the lower gear help decrease speed?"
+        )
+        assert "Listener question: How does the lower gear help decrease speed?" in (
+            answer_instructions
+        )
+
+        answer_handle = FakeSpeechHandle("speech-answer")
+        agent_session.handlers["speech_created"](
+            type("Speech", (), {"speech_handle": answer_handle})()
+        )
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+        answer_handle.finish()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        updates = _updates(room)
+        assert updates[-1].view.state.phase is PresentationPhase.COMPLETED
+        assert len(updates[-1].view.committed_beats) == 1
+        assert [event.type.value for event in updates[-1].view.events] == [
+            "answer_completed"
+        ]
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
+
+    asyncio.run(scenario())

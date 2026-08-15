@@ -262,10 +262,14 @@ class LiveKitConversationSession:
         ),
         http_context_factory: HttpContextFactory = _default_http_context_factory,
         diagnostic_ledger: ConversationDiagnosticLedger | None = None,
+        transcript_clock: Callable[[], float] = time.monotonic,
+        transcript_merge_window_seconds: float = 1.5,
         session_timeout_seconds: float = 180,
     ) -> None:
         if session_timeout_seconds <= 0:
             raise ValueError("session timeout must be positive")
+        if transcript_merge_window_seconds <= 0:
+            raise ValueError("transcript merge window must be positive")
         self._spec = spec
         self._voice_session_factory = voice_session_factory
         self._room = room or rtc.Room()
@@ -281,6 +285,8 @@ class LiveKitConversationSession:
             attempt_id=spec.attempt_id,
             ledger=diagnostic_ledger,
         )
+        self._transcript_clock = transcript_clock
+        self._transcript_merge_window_seconds = transcript_merge_window_seconds
         self._diagnostic_tasks: set[asyncio.Task[None]] = set()
         self._transcript_tasks: set[asyncio.Task[None]] = set()
         self._transcript_tail: asyncio.Task[None] | None = None
@@ -288,6 +294,10 @@ class LiveKitConversationSession:
         self._user_transcript_sequence = 0
         self._agent_transcript_sequence = 0
         self._active_user_transcript_id: str | None = None
+        self._active_user_transcript_prefix = ""
+        self._last_final_user_transcript_id: str | None = None
+        self._last_final_user_transcript_text = ""
+        self._last_final_user_transcript_at: float | None = None
         self._presentation_tasks: set[asyncio.Task[None]] = set()
         self._presentation_lock = asyncio.Lock()
         self._presentation_started = False
@@ -405,22 +415,47 @@ class LiveKitConversationSession:
             is_final = bool(getattr(event, "is_final", False))
             if not text:
                 if is_final:
-                    self._active_user_transcript_id = None
+                    self._close_user_transcript_group()
                 return
+            now = self._transcript_clock()
             if self._active_user_transcript_id is None:
-                self._user_transcript_sequence += 1
-                self._active_user_transcript_id = (
-                    f"user-{self._user_transcript_sequence}"
+                can_merge = (
+                    self._last_final_user_transcript_id is not None
+                    and self._last_final_user_transcript_at is not None
+                    and now - self._last_final_user_transcript_at
+                    <= self._transcript_merge_window_seconds
                 )
+                if can_merge:
+                    self._active_user_transcript_id = (
+                        self._last_final_user_transcript_id
+                    )
+                    self._active_user_transcript_prefix = (
+                        self._last_final_user_transcript_text
+                    )
+                else:
+                    self._user_transcript_sequence += 1
+                    self._active_user_transcript_id = (
+                        f"user-{self._user_transcript_sequence}"
+                    )
+                    self._active_user_transcript_prefix = ""
+            accumulated_text = " ".join(
+                part
+                for part in (self._active_user_transcript_prefix, text)
+                if part
+            )
             entry = ConversationTranscriptEntry(
                 id=self._active_user_transcript_id,
                 role="user",
-                text=text,
+                text=accumulated_text,
                 final=is_final,
             )
             self._queue_transcript(entry)
             if is_final:
+                self._last_final_user_transcript_id = entry.id
+                self._last_final_user_transcript_text = entry.text
+                self._last_final_user_transcript_at = now
                 self._active_user_transcript_id = None
+                self._active_user_transcript_prefix = ""
 
         @agent_session.on("conversation_item_added")
         def on_conversation_item_added(event: object) -> None:
@@ -430,6 +465,7 @@ class LiveKitConversationSession:
             text = str(getattr(item, "text_content", "")).strip()
             if not text:
                 return
+            self._close_user_transcript_group()
             provider_id = str(getattr(item, "id", "") or "").strip()
             if provider_id:
                 entry_id = f"agent-{provider_id}"
@@ -487,6 +523,13 @@ class LiveKitConversationSession:
         def on_error(_event: object) -> None:
             self._usage_outcome = "failed"
             self._finished.set()
+
+    def _close_user_transcript_group(self) -> None:
+        self._active_user_transcript_id = None
+        self._active_user_transcript_prefix = ""
+        self._last_final_user_transcript_id = None
+        self._last_final_user_transcript_text = ""
+        self._last_final_user_transcript_at = None
 
     def _queue_diagnostic(self, event: ConversationDiagnosticEvent) -> None:
         task = asyncio.create_task(self._publish_diagnostic(event))

@@ -73,3 +73,4 @@ class PresentationState(BaseModel):
     active_playout: ActivePlayout | None = None
     interrupted_cursor: Cursor | None = None
     continuation_preference: ContinuationPreference | None = None
+    answer_return_phase: PresentationPhase | None = None

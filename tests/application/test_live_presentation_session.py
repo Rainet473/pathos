@@ -204,3 +204,38 @@ def test_full_narration_playout_commits_once_and_completes_the_fixture():
     )
     assert duplicate.view.committed_beats == (narration.cursor,)
     assert event_types(duplicate) == [DomainEventType.STALE_RESPONSE_DISCARDED]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "How does the lower gear help decrease speed?",
+        "How does the lower gear help decrease speed? Continue after answering.",
+    ],
+)
+def test_question_after_completion_answers_without_restarting_narration(question):
+    session = new_session()
+    narration = session.start().generation
+    assert narration is not None
+    session.playout_started(turn_id=narration.turn_id)
+    completed = session.playout_finished(
+        turn_id=narration.turn_id,
+        interrupted=False,
+    )
+    assert completed.view.state.phase is PresentationPhase.COMPLETED
+
+    answer = session.prepare_question(question)
+
+    assert answer.view.state.phase is PresentationPhase.ANSWERING
+    assert answer.generation is not None
+    assert answer.generation.purpose is PlayoutPurpose.ANSWER
+    session.playout_started(turn_id=answer.generation.turn_id)
+    settled = session.playout_finished(
+        turn_id=answer.generation.turn_id,
+        interrupted=False,
+    )
+
+    assert settled.view.state.phase is PresentationPhase.COMPLETED
+    assert settled.view.committed_beats == (narration.cursor,)
+    assert settled.generation is None
+    assert event_types(settled) == [DomainEventType.ANSWER_COMPLETED]

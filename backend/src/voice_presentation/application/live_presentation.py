@@ -146,6 +146,8 @@ class ApplicationPresentationSession:
         if (
             self._controller.state.continuation_preference
             is ContinuationPreference.CONTINUE_AFTER_ANSWER
+            and self._controller.state.answer_return_phase
+            is not PresentationPhase.COMPLETED
         ):
             resume_turn_id = self._next_turn_id("narration")
         events = self._controller.answer_completed(

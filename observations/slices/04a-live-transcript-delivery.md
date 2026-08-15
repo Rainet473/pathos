@@ -68,9 +68,15 @@ microphone or generated answer
 - The real transcript event shapes are based on the installed LiveKit Agents
   1.5.17 `user_input_transcribed` and `conversation_item_added` contracts.
 
-The live observation remains open. It deliberately was not executed
-automatically because starting the configured inference pipeline consumes
-LiveKit room and inference quota.
+## Failed live observation: 16 August 2026
+
+- Attempt `e67f2864-9e36-464e-a0ee-b283bccd212f` proved that normalized user
+  transcript delivery reaches the browser, but closely spaced final STT fragments
+  appeared as three visible user rows.
+- No agent transcript was produced because an independent application transition
+  bug rejected a question received just after the final beat committed. That
+  recovery is tracked in `04b-post-completion-question-recovery.md`.
+- The live exit gate therefore remains open.
 
 ## Fallback or rollback
 

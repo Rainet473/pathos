@@ -222,7 +222,12 @@ def test_livekit_inference_factory_uses_documented_three_model_starter():
             "api_secret": "private-livekit-secret",
         }
     ]
-    assert turn_handling_constructor.calls == [{"turn_detection": "stt"}]
+    assert turn_handling_constructor.calls == [
+        {
+            "turn_detection": "stt",
+            "endpointing": {"min_delay": 1.2, "max_delay": 3.0},
+        }
+    ]
     assert session_constructor.calls == [
         {
             "stt": stt,

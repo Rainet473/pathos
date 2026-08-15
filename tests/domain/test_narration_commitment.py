@@ -122,3 +122,82 @@ def test_final_beat_completion_finishes_presentation(deck_payload):
 
     assert controller.state.phase is contracts.PresentationPhase.COMPLETED
     assert "presentation_completed" in event_types(events)
+
+
+def test_post_completion_answer_returns_to_completed_without_recommitting(deck_payload):
+    contracts, _, controller = started_controller(deck_payload, turn_id="narration-1")
+
+    for index, turn_id in enumerate(
+        ("narration-1", "narration-2", "narration-3", "narration-4")
+    ):
+        if index:
+            controller.playout_started(
+                turn_id=turn_id,
+                cursor=controller.state.presentation_cursor,
+                purpose=contracts.PlayoutPurpose.NARRATION,
+            )
+        controller.playout_completed(
+            turn_id=turn_id,
+            cursor=controller.state.presentation_cursor,
+        )
+
+    completed_cursor = controller.state.presentation_cursor
+    controller.begin_answer(
+        turn_id="answer-1",
+        continuation_preference=contracts.ContinuationPreference.CONTINUE_AFTER_ANSWER,
+    )
+    controller.playout_started(
+        turn_id="answer-1",
+        cursor=completed_cursor,
+        purpose=contracts.PlayoutPurpose.ANSWER,
+    )
+
+    events = controller.answer_completed(turn_id="answer-1")
+
+    assert controller.state.phase is contracts.PresentationPhase.COMPLETED
+    assert controller.state.presentation_cursor == completed_cursor
+    assert controller.state.active_turn_id is None
+    assert event_types(events) == ["answer_completed"]
+
+
+def test_interrupted_post_completion_answer_preserves_completed_return(deck_payload):
+    contracts, _, controller = started_controller(deck_payload, turn_id="narration-1")
+
+    for index, turn_id in enumerate(
+        ("narration-1", "narration-2", "narration-3", "narration-4")
+    ):
+        if index:
+            controller.playout_started(
+                turn_id=turn_id,
+                cursor=controller.state.presentation_cursor,
+                purpose=contracts.PlayoutPurpose.NARRATION,
+            )
+        controller.playout_completed(
+            turn_id=turn_id,
+            cursor=controller.state.presentation_cursor,
+        )
+
+    completed_cursor = controller.state.presentation_cursor
+    controller.begin_answer(
+        turn_id="answer-1",
+        continuation_preference=contracts.ContinuationPreference.ASK_BEFORE_CONTINUING,
+    )
+    controller.playout_started(
+        turn_id="answer-1",
+        cursor=completed_cursor,
+        purpose=contracts.PlayoutPurpose.ANSWER,
+    )
+    controller.playout_interrupted(turn_id="answer-1")
+    controller.begin_answer(
+        turn_id="answer-2",
+        continuation_preference=contracts.ContinuationPreference.ASK_BEFORE_CONTINUING,
+    )
+    controller.playout_started(
+        turn_id="answer-2",
+        cursor=completed_cursor,
+        purpose=contracts.PlayoutPurpose.ANSWER,
+    )
+
+    controller.answer_completed(turn_id="answer-2")
+
+    assert controller.state.phase is contracts.PresentationPhase.COMPLETED
