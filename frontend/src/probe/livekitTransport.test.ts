@@ -5,6 +5,7 @@ import { LiveKitProbeTransport } from "./livekitTransport";
 
 class FakeRoom {
   handlers = new Map<string, (...args: unknown[]) => void>();
+  startAudioError: Error | null = null;
   startAudioCalls = 0;
   unpublishCalls = 0;
   publishDataCalls = 0;
@@ -30,10 +31,29 @@ class FakeRoom {
 
   async startAudio() {
     this.startAudioCalls += 1;
+    if (this.startAudioError !== null) throw this.startAudioError;
   }
 }
 
 describe("LiveKit probe transport", () => {
+  it("treats blocked gesture-time audio priming as an event-driven recovery", async () => {
+    const room = new FakeRoom();
+    room.startAudioError = new Error("playback blocked");
+    const transport = new LiveKitProbeTransport(
+      {
+        onStatus: () => undefined,
+        onDisconnected: () => undefined,
+        onAudioPlaybackBlocked: () => undefined,
+      },
+      { roomFactory: () => room as unknown as Room },
+    );
+
+    const primeResult: unknown = transport.primeAudio();
+    expect(primeResult).toBeUndefined();
+    if (primeResult instanceof Promise) await primeResult.catch(() => undefined);
+    expect(room.startAudioCalls).toBe(1);
+  });
+
   it("primes browser audio directly and always stops the microphone after stop failure", async () => {
     const room = new FakeRoom();
     let microphoneStopped = false;
@@ -54,7 +74,7 @@ describe("LiveKit probe transport", () => {
       },
     );
 
-    await transport.primeAudio();
+    transport.primeAudio();
     await transport.connect({
       attemptId: "9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
       roomName: "probe-9ea3a1cb",

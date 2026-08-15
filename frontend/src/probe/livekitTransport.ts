@@ -60,8 +60,10 @@ export class LiveKitProbeTransport {
     });
   }
 
-  async primeAudio(): Promise<void> {
-    await this.room.startAudio();
+  primeAudio(): void {
+    // startAudio emits AudioPlaybackStatusChanged on failure. Consume the
+    // rejection here because this call must remain inside the initial gesture.
+    void this.room.startAudio().catch(() => undefined);
   }
 
   async connect(session: ProbeSessionResponse): Promise<void> {

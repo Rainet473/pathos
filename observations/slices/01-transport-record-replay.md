@@ -57,11 +57,11 @@ The complete quiet-start, interruption, answer, wait/resume interaction through 
 - First Python red gate: 18 failures, all caused by the absent `voice_presentation` transport/server modules.
 - Second Python red gate: 7 failures, all caused by the absent versioned signal contract and LiveKit session launcher.
 - Frontend red gates: missing `state.ts`, then missing `protocol.ts`; the already-authored reducer tests continued to pass during the second gate.
-- Review regression red gate: two backend failures exposed missing worker timeout/application shutdown, and two frontend failures exposed microphone/failure cleanup behavior before those fixes were added.
+- Review regression red gate: two backend failures exposed missing worker timeout/application shutdown, two frontend failures exposed microphone/failure cleanup behavior, and a final SDK-source check exposed an unhandled blocked-playback rejection before those fixes were added.
 - Offline Python command: `python -m pytest -q tests/transport tests/server tests/adapters`.
 - Offline Python result: 32 passed in 0.49 seconds.
 - Frontend command: `npm test`.
-- Frontend result: 3 files and 10 tests passed in 0.21 seconds.
+- Frontend result: 3 files and 11 tests passed in 0.18 seconds.
 - Build command: `npm run build`.
 - Build result: successful Vite production build; the LiveKit-containing JavaScript chunk is 689.29 kB before gzip and remains an accepted Slice 1 optimization deferral.
 - Server smoke: the configured FastAPI factory bound locally and `GET /api/health` returned `{"status":"ok"}`.

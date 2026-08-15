@@ -44,7 +44,7 @@ export default function App() {
       },
     });
     transport.current = client;
-    void client.primeAudio();
+    client.primeAudio();
 
     try {
       await previous?.disconnect();
