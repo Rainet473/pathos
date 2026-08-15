@@ -332,6 +332,138 @@ button:disabled {
   color: #e77f4a;
 }
 
+.slide-visual {
+  width: min(100%, 720px);
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #3a3f49;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(231, 127, 74, 0.035), transparent 48%),
+    #1d2127;
+}
+
+.slide-visual svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.diagram-link,
+.diagram-feedback {
+  fill: none;
+  stroke: #e77f4a;
+  stroke-width: 3;
+  marker-end: url(#arrow);
+}
+
+.diagram-link-reverse {
+  marker-start: url(#arrow);
+  marker-end: none;
+}
+
+.diagram-feedback {
+  stroke: #f0c756;
+  stroke-dasharray: 7 6;
+}
+
+.diagram-arrow-head {
+  fill: #e77f4a;
+}
+
+.diagram-node rect {
+  fill: #242830;
+  stroke: #4a505b;
+}
+
+.diagram-node text,
+.diagram-machine-label,
+.diagram-caption {
+  fill: #cfd2d8;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.diagram-node-accent rect {
+  fill: rgba(231, 127, 74, 0.12);
+  stroke: #e77f4a;
+}
+
+.diagram-machine,
+.diagram-wheel {
+  fill: #242830;
+  stroke: #e77f4a;
+  stroke-width: 4;
+}
+
+.diagram-wheel {
+  stroke-width: 10;
+}
+
+.diagram-wheel-hub {
+  fill: #e77f4a;
+}
+
+.diagram-clutch circle {
+  fill: rgba(231, 127, 74, 0.08);
+  stroke: #e77f4a;
+  stroke-width: 3;
+}
+
+.diagram-gears circle {
+  fill: #242830;
+  stroke: #cfd2d8;
+  stroke-width: 5;
+  stroke-dasharray: 7 4;
+}
+
+.diagram-energy,
+.diagram-throttle,
+.diagram-axis,
+.diagram-target,
+.diagram-speed {
+  fill: none;
+  stroke: #5b626e;
+  stroke-width: 2;
+}
+
+.diagram-energy {
+  stroke: #f0c756;
+  stroke-width: 4;
+  stroke-dasharray: 3 8;
+}
+
+.diagram-throttle {
+  stroke: #f06b70;
+  stroke-width: 5;
+}
+
+.diagram-target {
+  stroke: #cfd2d8;
+  stroke-dasharray: 8 7;
+}
+
+.diagram-speed {
+  stroke: #e77f4a;
+  stroke-width: 5;
+}
+
+.diagram-focus {
+  fill: #f0c756;
+}
+
+.diagram-caption {
+  fill: #9299a4;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.diagram-caption-accent {
+  fill: #f0c756;
+  font-weight: 700;
+}
+
 .slide-labels {
   display: flex;
   flex-wrap: wrap;

@@ -220,6 +220,7 @@ function presentationUpdate(sessionVersion: number) {
         title: "Engine Braking",
         headline: "Low gears make engine braking feel stronger.",
         labels: ["closed throttle", "drivetrain resistance", "gear ratio"],
+        visualDescription: "The rear wheel drives a resisting engine through the selected ratio.",
       }],
       events: [],
       scopeMode: null,

@@ -30,6 +30,7 @@ function snapshot(sessionVersion: number, sessionId = "session-1"): FakeSessionS
         title: "Engine Braking",
         headline: "Low gears make the effect feel stronger.",
         labels: ["closed throttle", "gear ratio"],
+        visualDescription: "The rear wheel drives a resisting engine through the selected ratio.",
       },
     ],
     transcript: [],

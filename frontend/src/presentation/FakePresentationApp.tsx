@@ -8,6 +8,7 @@ import {
   initialPresentationUiState,
   type PresentationPhase,
 } from "./state";
+import { SlideVisual } from "./slideVisuals";
 
 const GROUNDED_QUESTION = "Why does engine braking feel stronger in a low gear?";
 
@@ -85,13 +86,7 @@ export default function FakePresentationApp() {
           <div className="slide-number">One-slide fixture</div>
           <h1>{visibleSlide.title}</h1>
           <p className="slide-headline">{visibleSlide.headline}</p>
-          <div className="flow-line" aria-hidden="true">
-            <span>Closed throttle</span>
-            <b>→</b>
-            <span>Engine resistance</span>
-            <b>→</b>
-            <span>Rear wheel slows</span>
-          </div>
+          <SlideVisual slideId={visibleSlide.id} description={visibleSlide.visualDescription} />
           <ul className="slide-labels">
             {visibleSlide.labels.map((label) => (
               <li key={label}>{label}</li>

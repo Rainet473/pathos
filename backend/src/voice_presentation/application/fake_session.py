@@ -46,6 +46,7 @@ class SlideView(BaseModel):
     title: str
     headline: str
     labels: tuple[str, ...]
+    visual_description: str
 
 
 class FakeSessionView(BaseModel):
@@ -97,6 +98,7 @@ class FakePresentationSession:
                     title=slide.title,
                     headline=slide.headline,
                     labels=slide.labels,
+                    visual_description=slide.visual_description,
                 )
                 for slide in deck.slides
             ),

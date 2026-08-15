@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef } from "react";
 
 import type { PresentationPhase } from "../presentation/state";
+import { SlideVisual } from "../presentation/slideVisuals";
 import { createLiveSession } from "./api";
 import { LiveKitConversationTransport } from "./livekitTransport";
 import { createLiveAttemptIdentifiers } from "./protocol";
@@ -170,9 +171,7 @@ export default function LiveConversationApp() {
           <div className="slide-number">Application-selected slide</div>
           <h1>{visibleSlide.title}</h1>
           <p className="slide-headline">{visibleSlide.headline}</p>
-          <div className="flow-line" aria-hidden="true">
-            <span>Closed throttle</span><b>→</b><span>Engine resistance</span><b>→</b><span>Rear wheel slows</span>
-          </div>
+          <SlideVisual slideId={visibleSlide.id} description={visibleSlide.visualDescription} />
           <ul className="slide-labels">
             {visibleSlide.labels.map((label) => <li key={label}>{label}</li>)}
           </ul>

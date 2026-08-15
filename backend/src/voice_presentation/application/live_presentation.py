@@ -95,6 +95,7 @@ class ApplicationPresentationSession:
                     title=slide.title,
                     headline=slide.headline,
                     labels=slide.labels,
+                    visual_description=slide.visual_description,
                 )
                 for slide in deck.slides
             ),

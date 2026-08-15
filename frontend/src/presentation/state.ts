@@ -38,6 +38,7 @@ export interface SlideSummary {
   title: string;
   headline: string;
   labels: string[];
+  visualDescription: string;
 }
 
 export interface TranscriptEntry {
