@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=80,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interruptible-voice-presentation"
+version = "0.1.0"
+description = "An interruptible, stateful AI voice presentation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic==2.13.4",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==9.1.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["backend/src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["backend/src"]
+markers = [
+    "offline: deterministic tests that require no network or provider credentials",
+    "integration: tests that cross a process, transport, or service boundary",
+    "live: opt-in tests that use external services or model providers",
+    "observation: repeatable human-evaluated scenarios with retained evidence",
+]
