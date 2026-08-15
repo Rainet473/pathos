@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec First Testing"
+  short_description: "Define observable behavior and tests before implementation"
+  default_prompt: "Use $spec-first-testing to write the behavior contract, edge cases, automated tests, and observation rubric before implementation."

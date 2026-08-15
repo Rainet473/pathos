@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build in Verified Slices"
+  short_description: "Deliver integrations through small observable checkpoints"
+  default_prompt: "Use $build-in-verified-slices to plan and implement the smallest observable slice with explicit entry and exit gates."
