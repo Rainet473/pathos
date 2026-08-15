@@ -59,16 +59,16 @@ The complete quiet-start, interruption, answer, wait/resume interaction through 
 - Frontend red gates: missing `state.ts`, then missing `protocol.ts`; the already-authored reducer tests continued to pass during the second gate.
 - Review regression red gate: two backend failures exposed missing worker timeout/application shutdown, two frontend failures exposed microphone/failure cleanup behavior, and a final SDK-source check exposed an unhandled blocked-playback rejection before those fixes were added.
 - Post-credential review red gate: six regressions exposed browser-minute undercounting, EOS incorrectly authorizing replay, a per-frame rather than global drain timeout, handled failures recorded as completed, terminal UI blocked behind ACK, and a weak opt-in live oracle. Each received an expectation update and a failing test before its fix.
-- Offline Python command: `python -m pytest -q tests/transport tests/server tests/adapters`.
-- Final offline Python result: 42 passed and the opt-in live test skipped by default in 0.47 seconds.
+- Offline Python command: `python -m pytest -q tests/transport tests/server tests/adapters tests/scripts tests/live`.
+- Final offline Python result on 16 August 2026: 48 passed and the opt-in live test skipped by default in 1.59 seconds. This includes six backend/frontend launcher tests.
 - Frontend command: `npm test`.
 - Final frontend result: 3 files and 16 tests passed in 0.18 seconds.
 - Build command: `npm run build`.
-- Build result: successful Vite production build; the LiveKit-containing JavaScript chunk is 689.29 kB before gzip and remains an accepted Slice 1 optimization deferral.
-- Server smoke: the configured FastAPI factory bound locally and `GET /api/health` returned `{"status":"ok"}`.
-- Frontend smoke: the Vite server bound locally and returned the probe page HTML.
+- Build result on 16 August 2026: successful Vite production build; the LiveKit-containing JavaScript chunk is 690.38 kB before gzip and remains an accepted Slice 1 optimization deferral.
+- Server launcher smoke: `scripts/run-backend.sh` loaded the ignored environment, the configured FastAPI factory bound locally, and `GET /api/health` returned `{"status":"ok"}`. No probe session was created.
+- Frontend launcher smoke: `scripts/run-frontend.sh --host 127.0.0.1` started Vite 8.1.5 and the root path returned the probe page HTML with HTTP 200.
 - Visual browser smoke: not captured because no controllable browser instance was available in this workspace session; the TypeScript build and served-HTML checks passed.
-- The unchanged 27 Slice 0 domain tests remain intentionally red until Slice 2 implements the domain package.
+- Full-suite baseline on 16 August 2026: 27 expected Slice 0 failures, 48 passes and one opt-in live skip. Every failure is the deliberate missing `voice_presentation.domain` seam that Slice 2 will implement.
 - A local `.env` became available on 15 August 2026. It stayed ignored, its permissions were tightened from `0644` to `0600`, and no value was printed or copied.
 - Important limitation: Python `AudioSource.wait_for_playout()` establishes that the Python source queue drained; it does not prove that browser playout finished. This probe must not be reused as narration-beat commitment evidence without a later browser acknowledgement.
 
@@ -89,3 +89,14 @@ The browser-control surface had no available browser instance, so the two creden
 - The first observation produced the deterministic `capture_stopped` bounded-drain regression. The second showed that worker completion succeeded but the final status could be lost on immediate disconnect, producing the `replay_acknowledged` handshake regression.
 - Both regressions pass offline. The handshake was deliberately not re-run against Cloud in this session, keeping consumption at the announced two-attempt cap.
 - The five spoken clips, human intelligibility judgement, screenshot/recording and disconnect/recovery observation remain open.
+
+## Advancement decision
+
+Slice 1 is not labelled complete: its human browser/acoustic and recovery gates
+remain open and must be run before release. The real Cloud observations do,
+however, establish bidirectional media transport and expose the lifecycle races
+now covered offline. Because Slice 2 introduces no provider or transport
+dependency, work may advance to the deterministic fake product while these
+manual Slice 1 gates remain explicitly tracked. Slice 2 results must not be used
+to claim that browser microphone intelligibility or acoustic interruption has
+passed.
