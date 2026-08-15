@@ -25,6 +25,33 @@ _STOP_WORDS = {
     "what",
     "why",
 }
+_TERM_ALIASES = {
+    "abruptly": "abrupt",
+    "brakes": "brake",
+    "braking": "brake",
+    "decelerate": "deceleration",
+    "decelerates": "deceleration",
+    "decrease": "deceleration",
+    "decreases": "deceleration",
+    "decreasing": "deceleration",
+    "gears": "gear",
+    "matched": "match",
+    "matches": "match",
+    "matching": "match",
+    "quickly": "abrupt",
+    "rapid": "abrupt",
+    "released": "release",
+    "releasing": "release",
+    "revs": "engine_speed",
+    "rpm": "engine_speed",
+    "rpms": "engine_speed",
+    "slow": "deceleration",
+    "slowing": "deceleration",
+    "slows": "deceleration",
+    "stronger": "strong",
+    "tyres": "tyre",
+    "wheels": "wheel",
+}
 
 
 class QuestionDecision(BaseModel):
@@ -61,30 +88,6 @@ class QuestionScopePolicy:
         if self._is_unsafe_specific_or_unrelated(normalized):
             return QuestionDecision(scope_mode=ScopeMode.OUT_OF_SCOPE)
 
-        question_terms = self._terms(normalized)
-        best_slide_id: str | None = None
-        best_evidence: tuple[str, ...] = ()
-        best_score = 0
-        for slide in self._deck.slides:
-            for deep_dive in slide.deep_dive:
-                evidence_terms = self._terms(
-                    " ".join(
-                        (deep_dive.concept, deep_dive.explanation, *deep_dive.caveats)
-                    )
-                )
-                score = len(question_terms & evidence_terms)
-                if score > best_score:
-                    best_score = score
-                    best_slide_id = slide.id
-                    best_evidence = (deep_dive.explanation, *deep_dive.caveats)
-
-        if best_score >= 2:
-            return QuestionDecision(
-                scope_mode=ScopeMode.GROUNDED,
-                evidence=best_evidence,
-                supporting_slide_id=best_slide_id,
-            )
-
         for slide in self._deck.slides:
             if any(term.lower() in normalized for term in slide.related_terms):
                 return QuestionDecision(
@@ -93,11 +96,43 @@ class QuestionScopePolicy:
                     disclosure_required=True,
                 )
 
+        question_terms = self._terms(normalized)
+        best_slide_id: str | None = None
+        best_evidence: tuple[str, ...] = ()
+        best_score = 0
+        best_overlap = 0
+        for slide in self._deck.slides:
+            for deep_dive in slide.deep_dive:
+                concept_terms = self._terms(deep_dive.concept)
+                detail_terms = self._terms(
+                    " ".join((deep_dive.explanation, *deep_dive.caveats))
+                )
+                score = 3 * len(question_terms & concept_terms) + len(
+                    question_terms & detail_terms
+                )
+                overlap = len(question_terms & (concept_terms | detail_terms))
+                if (score, overlap) > (best_score, best_overlap):
+                    best_score = score
+                    best_overlap = overlap
+                    best_slide_id = slide.id
+                    best_evidence = (deep_dive.explanation, *deep_dive.caveats)
+
+        if best_score >= 3 and best_overlap >= 2:
+            return QuestionDecision(
+                scope_mode=ScopeMode.GROUNDED,
+                evidence=best_evidence,
+                supporting_slide_id=best_slide_id,
+            )
+
         return QuestionDecision(scope_mode=ScopeMode.OUT_OF_SCOPE)
 
     @staticmethod
     def _terms(text: str) -> set[str]:
-        return {word for word in _WORD.findall(text.lower()) if word not in _STOP_WORDS}
+        return {
+            _TERM_ALIASES.get(word, word)
+            for word in _WORD.findall(text.lower())
+            if word not in _STOP_WORDS
+        }
 
     @staticmethod
     def _is_unsafe_specific_or_unrelated(normalized: str) -> bool:

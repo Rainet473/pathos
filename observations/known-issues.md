@@ -40,7 +40,7 @@ but must remain visible during later breadth and release work.
 
 ## KI-003 — Motorcycle paraphrases can be falsely marked out of scope
 
-- **Status:** next-slice input for six-slide material resolution.
+- **Status:** mitigated offline; live verification pending.
 - **Observed:** 16 August 2026, attempts
   `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` and
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
@@ -49,7 +49,9 @@ but must remain visible during later breadth and release work.
   resolver lacks the material breadth and phrase coverage needed for these forms.
 - **Impact:** the generated answer may still sound relevant, but the disclosed
   scope mode and selected evidence are unreliable for natural paraphrases.
-- **Later acceptance case:** the fixed six-slide evaluation questions and defined
-  paraphrases resolve to grounded, extended, clarification, or out-of-scope modes
-  consistently without allowing generated prose to choose navigation.
-
+- **Offline mitigation:** Slice 5b adds the six-slide evaluation, bounded
+  gear/rev/braking aliases, concept-weighted matching, and a two-term grounding
+  floor. The fixed cases and four recorded paraphrases now pass deterministically.
+- **Remaining acceptance case:** repeat the relevant spoken variants in a bounded
+  live full-deck observation and verify that STT wording still resolves to the
+  intended mode. Generated prose must remain unable to choose navigation.
