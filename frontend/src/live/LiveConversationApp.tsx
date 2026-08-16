@@ -3,11 +3,15 @@ import { useEffect, useReducer, useRef } from "react";
 import type { PresentationPhase } from "./presentationTypes";
 import { createLiveSession } from "./api";
 import { DeckSlideVisual } from "./deckSlideVisual";
-import { LiveKitConversationTransport } from "./livekitTransport";
+import type { LiveKitConversationTransport } from "./livekitTransport";
 import { createLiveAttemptIdentifiers } from "./protocol";
 import { initialLiveState, reduceLiveState, type LivePhase } from "./state";
 import type { LiveSessionEndReason } from "./lifecycle";
-import { adjacentSlideId } from "./slideNavigation";
+import {
+  adjacentSlideId,
+  canNavigateSlides,
+  navigationConsequence,
+} from "./slideNavigation";
 import {
   planningFailureMessage,
   planningRecoveryMessage,
@@ -34,53 +38,54 @@ export default function LiveConversationApp() {
     const previous = transport.current;
     dispatch({ type: "start_requested", attemptId: identifiers.attemptId });
 
-    let client: LiveKitConversationTransport;
-    client = new LiveKitConversationTransport({
-      onConnected: (backend) => {
-        if (transport.current !== client) return;
-        dispatch({ type: "connected", attemptId: identifiers.attemptId, backend });
-      },
-      onAgentState: (agentState) => {
-        if (transport.current !== client) return;
-        dispatch({ type: "agent_state", attemptId: identifiers.attemptId, state: agentState });
-      },
-      onLocalSpeechWhileAgentSpeaking: () => {
-        if (transport.current !== client) return;
-        dispatch({ type: "local_speech", attemptId: identifiers.attemptId });
-      },
-      onTranscript: (entry) => {
-        if (transport.current !== client) return;
-        dispatch({ type: "transcript", attemptId: identifiers.attemptId, entry });
-      },
-      onDiagnostic: (event) => {
-        if (transport.current !== client) return;
-        dispatch({ type: "diagnostic", attemptId: identifiers.attemptId, event });
-      },
-      onPresentation: (update) => {
-        if (transport.current !== client) return;
-        dispatch({ type: "presentation", attemptId: identifiers.attemptId, update });
-      },
-      onEnded: (reason) => {
-        if (transport.current !== client) return;
-        dispatch({ type: "ended", attemptId: identifiers.attemptId, reason });
-      },
-      onDisconnected: () => {
-        if (transport.current !== client) return;
-        dispatch({
-          type: "failed",
-          attemptId: identifiers.attemptId,
-          reason: "The live voice session disconnected.",
-        });
-      },
-      onAudioPlaybackBlocked: () => {
-        if (transport.current !== client) return;
-        dispatch({ type: "audio_playback_blocked", attemptId: identifiers.attemptId });
-      },
-    });
-    transport.current = client;
-    client.primeAudio();
+    let client: LiveKitConversationTransport | null = null;
 
     try {
+      const { LiveKitConversationTransport } = await import("./livekitTransport");
+      client = new LiveKitConversationTransport({
+        onConnected: (backend) => {
+          if (transport.current !== client) return;
+          dispatch({ type: "connected", attemptId: identifiers.attemptId, backend });
+        },
+        onAgentState: (agentState) => {
+          if (transport.current !== client) return;
+          dispatch({ type: "agent_state", attemptId: identifiers.attemptId, state: agentState });
+        },
+        onLocalSpeechWhileAgentSpeaking: () => {
+          if (transport.current !== client) return;
+          dispatch({ type: "local_speech", attemptId: identifiers.attemptId });
+        },
+        onTranscript: (entry) => {
+          if (transport.current !== client) return;
+          dispatch({ type: "transcript", attemptId: identifiers.attemptId, entry });
+        },
+        onDiagnostic: (event) => {
+          if (transport.current !== client) return;
+          dispatch({ type: "diagnostic", attemptId: identifiers.attemptId, event });
+        },
+        onPresentation: (update) => {
+          if (transport.current !== client) return;
+          dispatch({ type: "presentation", attemptId: identifiers.attemptId, update });
+        },
+        onEnded: (reason) => {
+          if (transport.current !== client) return;
+          dispatch({ type: "ended", attemptId: identifiers.attemptId, reason });
+        },
+        onDisconnected: () => {
+          if (transport.current !== client) return;
+          dispatch({
+            type: "failed",
+            attemptId: identifiers.attemptId,
+            reason: "The live voice session disconnected.",
+          });
+        },
+        onAudioPlaybackBlocked: () => {
+          if (transport.current !== client) return;
+          dispatch({ type: "audio_playback_blocked", attemptId: identifiers.attemptId });
+        },
+      });
+      transport.current = client;
+      client.primeAudio();
       await previous?.disconnect();
       const session = await createLiveSession(identifiers);
       await client.connect(session);
@@ -92,7 +97,7 @@ export default function LiveConversationApp() {
           reason: error instanceof Error ? error.message : "The live session could not start.",
         });
       }
-      await client.disconnect();
+      await client?.disconnect();
     } finally {
       startInFlight.current = false;
     }
@@ -185,10 +190,13 @@ export default function LiveConversationApp() {
   );
   const previousSlideId = adjacentSlideId(snapshot.slides, visibleSlide.id, -1);
   const nextSlideId = adjacentSlideId(snapshot.slides, visibleSlide.id, 1);
-  const canNavigate =
-    isActive(state.phase) &&
-    presentationPhase !== "answering" &&
-    snapshot.planningStage === null;
+  const canNavigate = canNavigateSlides(
+    isActive(state.phase),
+    presentationPhase,
+    snapshot.planningStage,
+    snapshot.state.activePlayout?.purpose ?? null,
+  );
+  const navigationNote = navigationConsequence(presentationPhase);
   const applicationStatusLabel = snapshot.planningStage
     ? planningStatusLabel(snapshot.planningStage)
     : presentationPhaseLabel(presentationPhase);
@@ -245,6 +253,9 @@ export default function LiveConversationApp() {
               </button>
             </div>
           </div>
+          {navigationNote && canNavigate ? (
+            <p className="navigation-consequence">{navigationNote}</p>
+          ) : null}
           <DeckSlideVisual
             key={`${snapshot.deckId}:${visibleSlide.id}`}
             deckId={snapshot.deckId}
@@ -438,7 +449,7 @@ function presentationPhaseDescription(phase: PresentationPhase): string {
     ready: "No narration is active.",
     presenting: "The selected beat remains uncommitted until its audio finishes. Browsing another slide interrupts narration and pauses the cursor.",
     interrupted: "The unfinished beat is preserved while your question is prepared.",
-    answering: "The answer has its own turn; the original beat remains uncommitted.",
+    answering: "The answer has its own turn; the original beat remains uncommitted. Browsing another slide stops this answer and pauses the presentation.",
     waiting: "Narration is paused. Browse freely; Continue restores the semantic cursor.",
     completed: "Verified narration playout committed the beat exactly once. The deck remains browsable.",
   }[phase];

@@ -57,7 +57,7 @@ stateDiagram-v2
     Ready --> Presenting: Start
     Presenting --> Interrupted: user speech or navigation
     Interrupted --> Answering: application prepares question
-    Answering --> Waiting: answer playout completed
+    Answering --> Waiting: answer completed or listener browses
     Waiting --> Presenting: explicit Continue
     Answering --> Presenting: answer completed + prior permission
     Presenting --> Completed: final narration playout completed
@@ -65,7 +65,10 @@ stateDiagram-v2
 
 Selection and playback are not commitment. A narration beat commits exactly
 once only when the active turn, purpose, cursor, and verified playout completion
-all match. Late callbacks become stale events rather than advancing state.
+all match. If the listener browses during answer playout, the application
+abandons the answer, clears any automatic-continuation permission, preserves the
+semantic cursor, and waits. Late callbacks become stale events rather than
+advancing state.
 
 ## Runtime layers
 
@@ -76,7 +79,7 @@ all match. Late callbacks become stale events rather than advancing state.
   diagnostics, and usage records.
 - `adapters/livekit/`: tokens, room orchestration, provider factories, and
   LiveKit event translation.
-- `server/`: production HTTP application composition.
+- `server/`: production HTTP application composition and dependency injection.
 
 The larger LiveKit bridge is orchestration code. Launcher lifecycle and agent
 construction are split into `conversation_launcher.py` and
@@ -101,15 +104,10 @@ each adapter. This makes capability differences visible during review.
 ## Production and regression composition
 
 `create_configured_app()` mounts health, deck rendering, and the live session
-bootstrap. `create_app()` accepts only the live conversation service; it cannot
-mount historical fake or record/replay routes. Deterministic regression tests
-target `ApplicationPresentationSession`, the domain controller, and small SDK
-boundary collaborators directly.
-
-The only transport-only diagnostic is an opt-in integration test in
-`tests/live/`. It connects two ordinary LiveKit SDK participants and checks that
-synthetic audio frames cross the room. It has no custom protocol, worker, API
-route, or browser UI and is skipped by the default offline gate.
+bootstrap. Tests can call `create_app()` with a lightweight conversation-service
+collaborator at the same live endpoint, but no fake or transport-probe product
+routes exist. The configured production surface is therefore the surface tested
+by the release contract.
 
 ## Content package
 

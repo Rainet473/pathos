@@ -354,6 +354,7 @@ class PresentationController:
             PresentationPhase.WAITING,
             PresentationPhase.COMPLETED,
         )
+        interrupted_return_phase = self.state.answer_return_phase
         events: list[DomainEvent] = []
         if slide_id != self.state.visible_slide_id:
             self.state.visible_slide_id = slide_id
@@ -365,8 +366,15 @@ class PresentationController:
                 )
             )
         if self.state.phase is PresentationPhase.INTERRUPTED:
-            self.state.phase = PresentationPhase.WAITING
-            events.append(DomainEvent(type=DomainEventType.PRESENTATION_WAITING))
+            self.state.continuation_preference = None
+            self.state.answer_return_phase = None
+            if interrupted_return_phase is PresentationPhase.COMPLETED:
+                self.state.phase = PresentationPhase.COMPLETED
+            else:
+                self.state.phase = PresentationPhase.WAITING
+                events.append(
+                    DomainEvent(type=DomainEventType.PRESENTATION_WAITING)
+                )
         if not events:
             return ()
         self._advance_version()

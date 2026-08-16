@@ -4,6 +4,7 @@ import pytest
 
 from voice_presentation.domain.content import PresentationDeck
 from voice_presentation.domain.contracts import (
+    ContinuationPreference,
     Cursor,
     PlayoutPurpose,
     PresentationPhase,
@@ -94,3 +95,78 @@ def test_manual_navigation_after_completion_keeps_terminal_cursor(deck_payload):
     assert controller.state.presentation_cursor == final
     assert controller.state.visible_slide_id == "engine-braking"
     assert events[0].slide_change_reason is SlideChangeReason.USER
+
+
+def test_navigation_after_answer_interruption_abandons_continuation_and_waits(
+    deck_payload,
+):
+    controller = _speaking_controller(deck_payload)
+    original_cursor = controller.state.presentation_cursor
+    controller.playout_interrupted(turn_id="narration-1")
+    controller.begin_answer(
+        turn_id="answer-1",
+        continuation_preference=ContinuationPreference.CONTINUE_AFTER_ANSWER,
+        question_slide_id="braking-abs",
+    )
+    controller.playout_started(
+        turn_id="answer-1",
+        cursor=original_cursor,
+        purpose=PlayoutPurpose.ANSWER,
+    )
+    controller.playout_interrupted(turn_id="answer-1")
+
+    events = controller.navigate_to_slide(slide_id="engine-braking")
+
+    assert controller.state.phase is PresentationPhase.WAITING
+    assert controller.state.presentation_cursor == original_cursor
+    assert controller.state.interrupted_cursor == original_cursor
+    assert controller.state.visible_slide_id == "engine-braking"
+    assert controller.state.continuation_preference is None
+    assert controller.state.answer_return_phase is None
+    assert [event.type for event in events] == [
+        DomainEventType.SLIDE_CHANGED,
+        DomainEventType.PRESENTATION_WAITING,
+    ]
+
+
+def test_navigation_after_post_completion_answer_returns_to_completed(deck_payload):
+    for slide in deck_payload["slides"]:
+        slide["beats"] = [slide["beats"][0]]
+    controller = _speaking_controller(deck_payload)
+    turn_sequence = 1
+    while controller.state.phase is not PresentationPhase.COMPLETED:
+        active = controller.state.active_turn_id
+        assert active is not None
+        controller.playout_completed(
+            turn_id=active,
+            cursor=controller.state.presentation_cursor,
+        )
+        if controller.state.phase is PresentationPhase.PRESENTING:
+            turn_sequence += 1
+            controller.select_narration(turn_id=f"narration-{turn_sequence}")
+            controller.playout_started(
+                turn_id=f"narration-{turn_sequence}",
+                cursor=controller.state.presentation_cursor,
+                purpose=PlayoutPurpose.NARRATION,
+            )
+
+    terminal_cursor = controller.state.presentation_cursor
+    controller.begin_answer(
+        turn_id="answer-1",
+        continuation_preference=ContinuationPreference.CONTINUE_AFTER_ANSWER,
+    )
+    controller.playout_started(
+        turn_id="answer-1",
+        cursor=terminal_cursor,
+        purpose=PlayoutPurpose.ANSWER,
+    )
+    controller.playout_interrupted(turn_id="answer-1")
+
+    events = controller.navigate_to_slide(slide_id="engine-braking")
+
+    assert controller.state.phase is PresentationPhase.COMPLETED
+    assert controller.state.presentation_cursor == terminal_cursor
+    assert controller.state.visible_slide_id == "engine-braking"
+    assert controller.state.continuation_preference is None
+    assert controller.state.answer_return_phase is None
+    assert [event.type for event in events] == [DomainEventType.SLIDE_CHANGED]

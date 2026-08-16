@@ -12,7 +12,7 @@ from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
 )
 from voice_presentation.content.repository import JsonMaterialRepository
-from voice_presentation.domain.contracts import PresentationPhase
+from voice_presentation.domain.contracts import PlayoutPurpose, PresentationPhase
 from voice_presentation.domain.provenance import GroundingSource
 from voice_presentation.domain.reasoning import (
     PlanningRejectionCode,
@@ -489,8 +489,8 @@ def test_bridge_records_narration_history_and_current_answer_context():
 def test_default_presentation_agent_injects_application_evidence_for_the_turn():
     from livekit.agents import llm
 
-    from voice_presentation.adapters.livekit.conversation import (
-        _default_presentation_agent_constructor,
+    from voice_presentation.adapters.livekit.conversation_agent import (
+        default_presentation_agent_constructor,
     )
 
     async def scenario() -> None:
@@ -502,7 +502,7 @@ def test_default_presentation_agent_injects_application_evidence_for_the_turn():
             assert provider_item_id is None or provider_item_id
             return "Use only selected evidence."
 
-        agent = _default_presentation_agent_constructor(
+        agent = default_presentation_agent_constructor(
             instructions="Follow application evidence.",
             prepare_user_turn=prepare_user_turn,
         )
@@ -524,8 +524,8 @@ def test_default_presentation_agent_injects_application_evidence_for_the_turn():
 def test_default_presentation_agent_suppresses_generation_without_validated_instructions():
     from livekit.agents import llm
 
-    from voice_presentation.adapters.livekit.conversation import (
-        _default_presentation_agent_constructor,
+    from voice_presentation.adapters.livekit.conversation_agent import (
+        default_presentation_agent_constructor,
     )
 
     async def scenario() -> None:
@@ -538,7 +538,7 @@ def test_default_presentation_agent_suppresses_generation_without_validated_inst
             calls.append((question, provider_item_id))
             return None
 
-        agent = _default_presentation_agent_constructor(
+        agent = default_presentation_agent_constructor(
             instructions="Follow application evidence.",
             prepare_user_turn=prepare_user_turn,
         )
@@ -562,8 +562,8 @@ def test_default_presentation_agent_suppresses_generation_without_validated_inst
 def test_default_presentation_agent_coalesces_incomplete_continuation_fragment():
     from livekit.agents import llm
 
-    from voice_presentation.adapters.livekit.conversation import (
-        _default_presentation_agent_constructor,
+    from voice_presentation.adapters.livekit.conversation_agent import (
+        default_presentation_agent_constructor,
     )
 
     async def scenario() -> None:
@@ -576,7 +576,7 @@ def test_default_presentation_agent_coalesces_incomplete_continuation_fragment()
             calls.append((question, provider_item_id))
             return "Use the combined follow-up."
 
-        agent = _default_presentation_agent_constructor(
+        agent = default_presentation_agent_constructor(
             instructions="Follow application evidence.",
             prepare_user_turn=prepare_user_turn,
             follow_up_fragment_window_seconds=0.1,
@@ -1120,6 +1120,146 @@ def test_browser_navigation_interrupts_narration_and_preserves_semantic_cursor()
         assert update.view.state.interrupted_cursor == original_cursor
         assert update.view.state.visible_slide_id == "braking-abs"
         assert update.view.committed_beats == ()
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_browser_navigation_validates_then_abandons_answer_and_continue_once():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        question = "What response did you mean? Continue after answering."
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        agent_constructor = RecordingPresentationAgentConstructor()
+        deck = JsonMaterialRepository(
+            REPOSITORY_ROOT
+            / "assets"
+            / "motorcycle-controls"
+            / "slide-breakdown.json"
+        ).load()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=ApplicationPresentationSession(
+                deck,
+                session_id=_spec().attempt_id,
+            ),
+            presentation_agent_constructor=agent_constructor,
+            follow_up_planner=FakeAcceptedPlanner(question),
+            http_context_factory=NullAsyncContext,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=2,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = SimpleNamespace(identity=_spec().browser_identity)
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        original_cursor = _updates(room)[-1].view.state.presentation_cursor
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["conversation_item_added"](
+            SimpleNamespace(
+                item=SimpleNamespace(
+                    id="provider-narration-1",
+                    role="assistant",
+                    text_content=(
+                        "Rider inputs create a response through the drivetrain and tyres..."
+                    ),
+                    interrupted=True,
+                    metrics=None,
+                )
+            )
+        )
+        agent_session.handlers["agent_state_changed"](
+            SimpleNamespace(old_state="thinking", new_state="speaking")
+        )
+        narration_handle.finish(interrupted=True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        prepare_user_turn = agent_constructor.calls[0]["prepare_user_turn"]
+        assert await prepare_user_turn(question, "provider-user-2") is not None
+        answer_handle = FakeSpeechHandle("speech-answer")
+        agent_session.handlers["speech_created"](
+            SimpleNamespace(speech_handle=answer_handle)
+        )
+        agent_session.handlers["agent_state_changed"](
+            SimpleNamespace(old_state="thinking", new_state="speaking")
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        answering = _updates(room)[-1]
+        assert answering.view.state.phase is PresentationPhase.ANSWERING
+        assert answering.view.state.active_playout is not None
+        assert (
+            answering.view.state.active_playout.purpose
+            is PlayoutPurpose.ANSWER
+        )
+
+        def navigate(slide_id: str) -> None:
+            room.handlers["data_received"](
+                SimpleNamespace(
+                    data=json.dumps(
+                        {"action": "navigate", "slideId": slide_id}
+                    ).encode(),
+                    topic=PRESENTATION_COMMAND_TOPIC,
+                    participant=browser,
+                )
+            )
+
+        navigate("missing-slide")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert answer_handle.interrupted is False
+        assert _updates(room)[-1] == answering
+
+        navigate(answering.view.state.visible_slide_id)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert answer_handle.interrupted is False
+        assert _updates(room)[-1] == answering
+
+        navigate("braking-abs")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        abandoned = _updates(room)[-1]
+        assert answer_handle.interrupted is True
+        assert abandoned.view.state.phase is PresentationPhase.WAITING
+        assert abandoned.view.state.presentation_cursor == original_cursor
+        assert abandoned.view.state.visible_slide_id == "braking-abs"
+        assert abandoned.view.state.continuation_preference is None
+        assert abandoned.view.state.answer_return_phase is None
+        assert len(agent_session.generated) == 1
+
+        answer_handle.finish(interrupted=False)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert _updates(room)[-1] == abandoned
+        assert len(agent_session.generated) == 1
+
+        room.handlers["data_received"](
+            SimpleNamespace(
+                data=b'{"action":"continue"}',
+                topic=PRESENTATION_COMMAND_TOPIC,
+                participant=browser,
+            )
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        resumed = _updates(room)[-1]
+        assert resumed.view.state.phase is PresentationPhase.PRESENTING
+        assert resumed.view.state.visible_slide_id == original_cursor.slide_id
+        assert len(agent_session.generated) == 2
 
         room.handlers["participant_disconnected"](browser)
         await asyncio.wait_for(task, timeout=0.1)

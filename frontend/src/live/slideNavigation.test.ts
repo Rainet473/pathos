@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { adjacentSlideId } from "./slideNavigation";
+import {
+  adjacentSlideId,
+  canNavigateSlides,
+  navigationConsequence,
+} from "./slideNavigation";
 
 const slides = [
   { id: "control-loop" },
@@ -19,5 +23,17 @@ describe("manual slide navigation", () => {
   it("returns null for an unknown visible slide or unsupported direction", () => {
     expect(adjacentSlideId(slides, "missing", 1)).toBeNull();
     expect(adjacentSlideId(slides, "control-loop", 0)).toBeNull();
+  });
+
+  it("keeps navigation available during answers but not silent planning", () => {
+    expect(canNavigateSlides(true, "answering", null, "answer")).toBe(true);
+    expect(canNavigateSlides(true, "answering", null, null)).toBe(false);
+    expect(canNavigateSlides(true, "answering", "searching", "answer")).toBe(false);
+    expect(canNavigateSlides(false, "answering", null, "answer")).toBe(false);
+  });
+
+  it("discloses that browsing abandons an active answer", () => {
+    expect(navigationConsequence("answering")).toContain("stops this answer");
+    expect(navigationConsequence("waiting")).toBeNull();
   });
 });

@@ -78,6 +78,11 @@ Start the backend and frontend separately:
 Open <http://localhost:5173>. The page stays disconnected until **Start** is
 pressed. Use headphones when testing interruption.
 
+For a short end-to-end walkthrough, follow the
+[live presentation demo script](docs/demo-script.md).
+For the implementation boundary, verification state, and remaining handoff
+items, see the [assignment handoff](docs/assignment-handoff.md).
+
 ## Optional realtime adapters
 
 The Gemini and OpenAI realtime implementations are comparison adapters, not
@@ -167,9 +172,9 @@ ignored and must not be committed. Sanitized evidence belongs under
 `observations/`.
 
 The packaged PPTX is preserved as an authoring source, but generic deck import
-is intentionally not implemented. Short referential questions can also lose
-their conversational antecedent; see KI-006. These limits are recorded rather
-than concealed behind model behavior.
+is intentionally not implemented. Provider transcript continuity and acronym
+recognition still have bounded limitations; see KI-002 and KI-007. These limits
+are recorded rather than concealed behind model behavior.
 
 ## License
 

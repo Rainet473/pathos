@@ -113,7 +113,7 @@ def _selected_voice_session_factory(
 
 
 def create_configured_app() -> FastAPI:
-    from voice_presentation.adapters.livekit.conversation import (
+    from voice_presentation.adapters.livekit.conversation_launcher import (
         LiveKitConversationSessionLauncher,
     )
     from voice_presentation.adapters.livekit.tokens import LiveKitTokenIssuer

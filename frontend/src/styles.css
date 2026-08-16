@@ -351,6 +351,14 @@ button:disabled {
   opacity: 0.38;
 }
 
+.navigation-consequence {
+  position: relative;
+  z-index: 1;
+  margin: 0 0 12px;
+  color: #f0c66f;
+  font-size: 0.78rem;
+}
+
 .deck-slide-render {
   position: relative;
   z-index: 1;
