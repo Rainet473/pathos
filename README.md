@@ -210,7 +210,6 @@ authoring the normalized package is currently a deliberate manual step. See
 | [Architecture](docs/architecture.md) | Module-level structure and dependency direction |
 | [Demo script](docs/demo-script.md) | Concise public walkthrough and success rubric |
 | [Known issues](observations/known-issues.md) | Observed behavior, mitigations, and deferred refinements |
-| [Assignment handoff](docs/assignment-handoff.md) | Delivery boundary and verification state |
 | [Contributing](CONTRIBUTING.md) | Engineering workflow and contribution expectations |
 
 ## Development and verification
