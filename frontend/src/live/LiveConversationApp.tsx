@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef } from "react";
 
 import type { PresentationPhase } from "./presentationTypes";
 import { createLiveSession } from "./api";
-import { DeckSlideVisual } from "./deckSlideVisual";
+import { DeckSlideVisual, deckSlideRenderUrl } from "./deckSlideVisual";
 import type { LiveKitConversationTransport } from "./livekitTransport";
 import { createLiveAttemptIdentifiers } from "./protocol";
 import { initialLiveState, reduceLiveState, type LivePhase } from "./state";
@@ -206,20 +206,65 @@ export default function LiveConversationApp() {
 
   return (
     <main className="presentation-shell live-presentation-shell">
-      <header className="presentation-header">
-        <div>
-          <p className="eyebrow">Live presentation</p>
-          <p className="mode-note">LiveKit Inference · Deepgram Nova-3 + Gemma 4 + Inworld TTS</p>
+      <header className="workspace-header">
+        <div className="workspace-brand" aria-label="Pathos">
+          <span aria-hidden="true">P</span>
+          <strong>Pathos</strong>
         </div>
+        <div className="workspace-title">
+          <strong>{snapshot.title}</strong>
+          <span>Interruptible voice presentation</span>
+        </div>
+        <div className={`workspace-connection status-${state.phase}`}>
+          <span className="status-dot" aria-hidden="true" />
+          <span>{phaseLabel(state.phase, state.endReason)}</span>
+        </div>
+        <button
+          type="button"
+          className="secondary workspace-stop"
+          onClick={() => void stop()}
+          disabled={!isActive(state.phase)}
+        >
+          Stop session
+        </button>
       </header>
 
-      <section className="presentation-grid" aria-live="polite">
-        <article className="slide-card">
-          <div className="deck-navigation">
+      <section className="workspace-grid" aria-live="polite">
+        <nav className="deck-rail" aria-label="Presentation slides">
+          <div className="deck-rail-heading">
+            <span>Deck</span>
+            <strong>{snapshot.slides.length} slides</strong>
+          </div>
+          <div className="deck-rail-list">
+            {snapshot.slides.map((slide, index) => (
+              <button
+                type="button"
+                key={slide.id}
+                className={`slide-thumbnail${slide.id === visibleSlide.id ? " is-visible" : ""}`}
+                aria-current={slide.id === visibleSlide.id ? "page" : undefined}
+                disabled={!canNavigate}
+                onClick={() => void navigateToSlide(slide.id)}
+              >
+                <span className="slide-thumbnail-image">
+                  <img
+                    src={deckSlideRenderUrl(snapshot.deckId, slide.id)}
+                    alt=""
+                    loading="lazy"
+                  />
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                </span>
+                <span className="slide-thumbnail-title">{slide.title}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
+
+        <article className="presentation-stage">
+          <div className="stage-toolbar">
             <div>
-              <span className="slide-number">Navigable presentation deck</span>
-              <span className="slide-position">
-                Slide {visibleSlideIndex + 1} of {snapshot.slides.length}
+              <strong>{visibleSlideIndex + 1}. {visibleSlide.title}</strong>
+              <span>
+                Visible slide · semantic cursor at {snapshot.state.presentationCursor.slideId}, beat {snapshot.state.presentationCursor.beatIndex + 1}
               </span>
             </div>
             <div className="deck-navigation-actions">
@@ -231,18 +276,6 @@ export default function LiveConversationApp() {
               >
                 Previous
               </button>
-              <select
-                aria-label="Visible slide"
-                value={visibleSlide.id}
-                disabled={!canNavigate}
-                onChange={(event) => void navigateToSlide(event.target.value)}
-              >
-                {snapshot.slides.map((slide, index) => (
-                  <option key={slide.id} value={slide.id}>
-                    {index + 1}. {slide.title}
-                  </option>
-                ))}
-              </select>
               <button
                 type="button"
                 className="secondary compact"
@@ -256,14 +289,16 @@ export default function LiveConversationApp() {
           {navigationNote && canNavigate ? (
             <p className="navigation-consequence">{navigationNote}</p>
           ) : null}
-          <DeckSlideVisual
-            key={`${snapshot.deckId}:${visibleSlide.id}`}
-            deckId={snapshot.deckId}
-            slide={visibleSlide}
-          />
+          <div className="stage-slide-frame">
+            <DeckSlideVisual
+              key={`${snapshot.deckId}:${visibleSlide.id}`}
+              deckId={snapshot.deckId}
+              slide={visibleSlide}
+            />
+          </div>
         </article>
 
-        <aside className="state-panel">
+        <aside className="state-panel session-inspector">
           <div className={`phase-badge phase-${snapshot.planningStage ? "planning" : presentationPhase}`}>
             <span className="status-dot" aria-hidden="true" />
             <div>
@@ -300,9 +335,6 @@ export default function LiveConversationApp() {
                 Continue presentation
               </button>
             ) : null}
-            <button type="button" className="secondary" onClick={() => void stop()} disabled={!isActive(state.phase)}>
-              Stop session
-            </button>
             {canStart ? <button type="button" onClick={() => void start()}>New attempt</button> : null}
             {state.needsAudioUnlock ? (
               <button type="button" className="secondary" onClick={() => void unlockAudio()}>
@@ -318,43 +350,57 @@ export default function LiveConversationApp() {
           ) : null}
           {state.failure ? <p className="failure">{state.failure}</p> : null}
         </aside>
-      </section>
 
-      <section className="evidence-grid">
-        <article className="evidence-card">
-          <div className="evidence-heading"><h2>Live transcript</h2><span>{state.transcript.length} segments</span></div>
-          {state.transcript.length === 0 ? <p className="empty-state">Narration is preparing.</p> : (
-            <ol className="transcript-list live-transcript">
-              {state.transcript.map((entry) => (
-                <li key={entry.id}><span>{entry.role}</span><p>{entry.text}</p></li>
-              ))}
-            </ol>
-          )}
-        </article>
-        <article className="evidence-card">
-          <div className="evidence-heading"><h2>Latest domain events</h2><span>{snapshot.events.length} events</span></div>
-          {snapshot.events.length === 0 ? <p className="empty-state">No transition has run.</p> : (
-            <ol className="event-list">
-              {snapshot.events.map((event, index) => (
-                <li key={`${event.type}-${event.turnId ?? "state"}-${index}`}>
-                  <code>{event.type}</code><span>{event.turnId ?? event.slideId ?? "state"}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-          {hasTiming(state.timing) ? (
-            <section className="live-timing" aria-label="Latest response timing">
-              <h2>Latest response timing</h2>
-              <dl className="metrics">
-                <Timing label="Follow-up planning" value={state.timing.planningDurationMs} />
-                <Timing label="End-of-turn detection" value={state.timing.endOfUtteranceDelayMs} />
-                <Timing label="LLM first token" value={state.timing.llmTtftMs} />
-                <Timing label="TTS first audio" value={state.timing.ttsTtfbMs} />
-                <Timing label="Interruption detection" value={state.timing.interruptionDetectionDelayMs} />
-              </dl>
-            </section>
-          ) : null}
-        </article>
+        <section className="workspace-dock">
+          <article className="evidence-card workspace-transcript">
+            <div className="evidence-heading">
+              <h2>Live transcript</h2>
+              <span>{state.transcript.length} segments</span>
+            </div>
+            {state.transcript.length === 0 ? (
+              <p className="empty-state">Narration is preparing.</p>
+            ) : (
+              <ol className="transcript-list live-transcript">
+                {state.transcript.map((entry) => (
+                  <li key={entry.id}>
+                    <span>{entry.role}</span>
+                    <p>{entry.text}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </article>
+          <article className="evidence-card workspace-events">
+            <div className="evidence-heading">
+              <h2>Latest domain events</h2>
+              <span>{snapshot.events.length} events</span>
+            </div>
+            {snapshot.events.length === 0 ? (
+              <p className="empty-state">No transition has run.</p>
+            ) : (
+              <ol className="event-list">
+                {snapshot.events.map((event, index) => (
+                  <li key={`${event.type}-${event.turnId ?? "state"}-${index}`}>
+                    <code>{event.type}</code>
+                    <span>{event.turnId ?? event.slideId ?? "state"}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {hasTiming(state.timing) ? (
+              <section className="live-timing" aria-label="Latest response timing">
+                <h2>Latest response timing</h2>
+                <dl className="metrics">
+                  <Timing label="Follow-up planning" value={state.timing.planningDurationMs} />
+                  <Timing label="End-of-turn detection" value={state.timing.endOfUtteranceDelayMs} />
+                  <Timing label="LLM first token" value={state.timing.llmTtftMs} />
+                  <Timing label="TTS first audio" value={state.timing.ttsTtfbMs} />
+                  <Timing label="Interruption detection" value={state.timing.interruptionDetectionDelayMs} />
+                </dl>
+              </section>
+            ) : null}
+          </article>
+        </section>
       </section>
       {state.attemptId ? <code className="attempt live-attempt">Attempt {state.attemptId}</code> : null}
     </main>

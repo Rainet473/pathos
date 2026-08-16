@@ -1,62 +1,132 @@
-# Interruptible Voice Presentation
+# Pathos
 
-An application-controlled voice presenter that narrates a browsable slide deck,
-answers spoken questions, survives interruption, and advances only after audio
-playout is verified.
+**An application-controlled, interruptible voice agent for presenting and
+reasoning over slide decks.**
 
-![The motorcycle control-loop slide in the live presentation](assets/motorcycle-controls/renders/control-loop.png)
+Pathos narrates an authored presentation, accepts spoken interruptions, searches
+bounded presentation material when needed, and resumes without losing its place.
+The language model speaks and plans; deterministic application code owns state,
+navigation, evidence validation, and narration commitment.
 
-The current release uses a LiveKit three-model pipeline—Deepgram Nova-3 for
-speech recognition, Gemma 4 for generation, and Inworld TTS. The domain model is
-provider-independent: LiveKit and model SDKs remain in adapters, while
-application code owns the presentation cursor, visible slide, answer mode, and
-commit rules.
+![Pathos architecture: browser, LiveKit, application control plane, voice model port, and presentation package](docs/assets/pathos-architecture.svg)
 
-## What is implemented
+## What Pathos does
 
-- Quiet start: no microphone, room, or model session before **Start**.
-- Six-slide visual deck with listener-controlled browsing.
-- Voice interruption without accidentally committing an unfinished beat.
-- Grounded, extended-knowledge, clarification, and out-of-scope answer modes.
-- Bounded silent follow-up planning with at most two deck searches and one
-  malformed-plan correction.
-- Disclosed citation-free fallback for safe recoverable plan-content failures;
-  timeout, provider, stale, cancellation, and disconnect failures stay closed.
-- Deck-authored acronym hints that preserve the authoritative transcript and ask
-  for clarification instead of silently rewriting uncertain terms.
-- Default wait after an answer, with explicit answer-and-continue permission.
-- Separate visible-slide and semantic presentation cursors.
-- Verified playout completion before a narration beat advances.
-- Two-minute inactivity cleanup and a fifteen-minute absolute session ceiling.
-- Private local usage, timing, transcript-context, and lifecycle diagnostics.
-- Deterministic application/domain coverage for presentation behavior, plus a
-  small opt-in direct LiveKit audio-transport smoke test.
+- Starts quietly: no room, microphone, or model session exists before **Start**.
+- Narrates a visual deck while the listener browses slides independently.
+- Stops promptly for spoken interruption without committing unfinished narration.
+- Resolves follow-ups from retained conversation, current-slide evidence, or up
+  to two bounded searches over the packaged deck.
+- Discloses whether an answer is grounded, extended model knowledge, a
+  clarification request, or out of scope.
+- Validates turn citations and deck evidence before generating an answer.
+- Waits after answers by default; explicit “answer and continue” resumes only
+  after verified answer playout.
+- Records private local traces for timing, usage, provider-reported cache tokens,
+  selected evidence, and application decisions.
 
-## Requirements
+The included six-slide motorcycle presentation is a reference content package,
+not a hard-coded topic boundary. Other presentations can use the same runtime
+when authored into the normalized package described below.
+
+## Architecture
+
+Pathos separates the generative voice loop from the authoritative presentation
+control plane:
+
+1. The React browser publishes microphone audio and receives speech, transcript,
+   slide state, and diagnostics through LiveKit.
+2. The LiveKit bridge translates provider events into correlated application
+   turns and playout facts.
+3. The application session validates every transition, maintains separate
+   visible and semantic slide positions, and issues provider-neutral generation
+   directives.
+4. A bounded silent planner either answers from retained context, searches the
+   packaged deck, requests clarification, discloses model knowledge, or returns
+   an out-of-scope boundary.
+5. A small voice-model port constructs the selected backend. The verified
+   default is Deepgram Nova-3 + Gemma 4 + Inworld TTS through LiveKit Inference;
+   Gemini Live and OpenAI Realtime are optional comparison adapters.
+
+Narration advances only after the active turn, purpose, cursor, and completed
+audio playout all match. Generated prose is never parsed to control slides.
+
+Read [How Pathos works](docs/concepts.md) for the state, interruption, reasoning,
+answer-mode, evidence, and content contracts.
+
+## Why Pathos
+
+- **Replaceable voice backend:** provider factories implement one small session
+  construction protocol while credentials and SDK details stay in adapters.
+- **Application-owned behavior:** interruption, continuation, navigation, and
+  exactly-once commitment are explicit state transitions rather than prompt
+  conventions.
+- **Bounded reasoning:** direct context answers avoid search; harder questions
+  can use deterministic local retrieval within fixed tool and time budgets.
+- **Validated provenance:** logical turns and material segments have stable IDs
+  that are checked before an answer may cite them.
+- **Portable deck contract:** stable slide/beat IDs, narration guidance, deep
+  dives, terminology, visual descriptions, and renders drive the same runtime.
+- **Evaluation-ready:** deterministic race tests and attempt-scoped local traces
+  make provider behavior inspectable without exposing fake product endpoints.
+- **Cache-aware, not cache-dependent:** stable context and provider-reported
+  cached-token metrics leave room to measure latency and cost without promising
+  cache hits.
+
+See the concise [advantages](docs/advantages.md) and honest
+[limitations](docs/limitations.md).
+
+## Demo
+
+<!-- DEMO_VIDEO_PLACEHOLDER -->
+
+> Demo video coming soon. Replace this block with the reviewed public recording.
+
+For a repeatable five-minute walkthrough now, use the
+[public demo script](docs/demo-script.md). It covers interruption, grounded
+follow-ups, answer-and-continue, browsing during an answer, and completion.
+
+## Quick start
+
+### Prerequisites
 
 - macOS or Linux
 - an active conda environment with Python 3.12
 - Node.js compatible with Vite 8 and npm
-- a LiveKit Cloud project
+- a LiveKit Cloud project and API credentials
 
-The default pipeline consumes LiveKit Inference credits and does not require a
-Google or OpenAI key. Provider prices and model availability can change; check
-your LiveKit project before running paid observations.
+The default pipeline consumes LiveKit Inference credits. Provider availability
+and pricing can change, so confirm the selected models in your LiveKit project.
 
-## Local setup
-
-Run all commands from the repository root and keep the same conda environment
-active in both terminals.
+### 1. Clone and install
 
 ```bash
+git clone https://github.com/Rainet473/pathos.git
+cd pathos
+
+# Activate your existing Python 3.12 conda environment first.
 python -m pip install -e ".[test]"
+
 cd frontend
 npm ci
 cd ..
+```
+
+If you do not already have a suitable environment, create and activate one
+before installing:
+
+```bash
+conda create -n voice-presentation python=3.12
+conda activate voice-presentation
+```
+
+### 2. Configure the live provider
+
+```bash
 cp .env.example .env
 ```
 
-Fill these values in `.env`:
+Set the required values in `.env`:
 
 ```dotenv
 LIVEKIT_URL=wss://your-project.livekit.cloud
@@ -65,29 +135,47 @@ LIVEKIT_API_SECRET=...
 VOICE_PROVIDER=livekit_inference_pipeline
 ```
 
-Start the backend and frontend separately:
+The default pipeline needs no separate Google or OpenAI key. Never commit
+`.env`.
+
+### 3. Run Pathos
+
+Keep the same conda environment active in both terminals.
+
+Terminal 1:
 
 ```bash
 ./scripts/run-backend.sh
 ```
 
+Terminal 2:
+
 ```bash
 ./scripts/run-frontend.sh
 ```
 
-Open <http://localhost:5173>. The page stays disconnected until **Start** is
-pressed. Use headphones when testing interruption.
+Open <http://localhost:5173>. The page remains quiet and disconnected until
+**Start presentation**. Use headphones when testing interruption.
 
-For a short end-to-end walkthrough, follow the
-[live presentation demo script](docs/demo-script.md).
-For the implementation boundary, verification state, and remaining handoff
-items, see the [assignment handoff](docs/assignment-handoff.md).
+### 4. Verify the checkout
 
-## Optional realtime adapters
+```bash
+./scripts/check.sh
+```
 
-The Gemini and OpenAI realtime implementations are comparison adapters, not
-default dependencies or the release provider. Install only the one you intend
-to use:
+The gate compiles Python, runs deterministic backend and frontend tests, checks
+installed Python dependencies, type-checks the frontend, and builds the
+production bundle. Paid provider observations remain opt-in.
+
+## Voice backend options
+
+| `VOICE_PROVIDER` | Role | Extra dependency / credential |
+|---|---|---|
+| `livekit_inference_pipeline` | Verified release default: Deepgram STT, Gemma LLM, Inworld TTS | LiveKit credentials only |
+| `gemini_live` | Optional Gemini Live comparison adapter | `.[gemini-realtime]` and `GOOGLE_API_KEY` |
+| `openai_realtime` | Optional OpenAI Realtime comparison adapter | `.[openai-realtime]` and `OPENAI_API_KEY` |
+
+Install an optional adapter with the test dependencies when developing:
 
 ```bash
 python -m pip install -e ".[test,gemini-realtime]"
@@ -95,49 +183,60 @@ python -m pip install -e ".[test,gemini-realtime]"
 python -m pip install -e ".[test,openai-realtime]"
 ```
 
-Then set `VOICE_PROVIDER` to `gemini_live` or `openai_realtime` and provide its
-corresponding API key. Provider-specific imports are lazy, so the default
-pipeline does not require either plugin.
+The adapters share the `VoiceSessionFactory` port, but LiveKit remains the
+current realtime transport and orchestration layer. Provider-specific VAD,
+endpointing, voices, and SDK construction stay explicit in each adapter.
 
-## Production HTTP surface
+## Using another presentation
 
-The configured backend registers only:
+The runtime loads `assets/<deck-id>/slide-breakdown.json` plus slide renders. A
+package supplies stable slide and beat IDs, objectives, narration guidance,
+required concepts, deep dives, caveats, related terms, textual visual
+descriptions, and asset metadata.
+
+Any reviewed deck that follows this validated contract can reuse the controller,
+planner, evidence validation, and browser. Raw PPTX/PDF import is not implemented;
+authoring the normalized package is currently a deliberate manual step. See
+[How Pathos works](docs/concepts.md#presentation-content-contract) and the
+[limitations](docs/limitations.md#raw-slide-decks-are-not-plug-and-play).
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [How Pathos works](docs/concepts.md) | Conceptual model, state ownership, interruption, reasoning, answer modes, evidence, and content |
+| [Advantages](docs/advantages.md) | Reusable implementation choices and their practical value |
+| [Limitations](docs/limitations.md) | Current technical and evidence boundaries |
+| [Architecture](docs/architecture.md) | Module-level structure and dependency direction |
+| [Demo script](docs/demo-script.md) | Concise public walkthrough and success rubric |
+| [Known issues](observations/known-issues.md) | Observed behavior, mitigations, and deferred refinements |
+| [Assignment handoff](docs/assignment-handoff.md) | Delivery boundary and verification state |
+| [Contributing](CONTRIBUTING.md) | Engineering workflow and contribution expectations |
+
+## Development and verification
+
+The configured production HTTP surface contains only:
 
 - `GET /api/health`
 - `GET /api/decks/{deck_id}/slides/{slide_id}/render`
 - `POST /api/live/sessions`
 
-There are no fake or transport-probe product endpoints. Tests exercise the same
-application session used by the live runtime, with lightweight collaborators at
-external SDK boundaries.
+There are no fake or transport-probe product endpoints. Tests use the same
+application session as the live runtime with lightweight collaborators at SDK
+boundaries.
 
-## Verification
-
-The complete local gate is:
-
-```bash
-./scripts/check.sh
-```
-
-It compiles the Python package, runs all deterministic Python and frontend
-tests, checks installed Python dependencies, and builds the production web
-bundle. Paid external-provider observations remain opt-in and are not implied by
-an offline green gate.
-
-Summarize retained planning cache, search latency, endpointing, and answer-scoped
-pipeline timing with:
+To summarize a retained attempt’s planning cache, search latency, endpointing,
+and answer-scoped pipeline timing:
 
 ```bash
 PYTHONPATH=backend/src python -m voice_presentation.transport.reasoning_evidence \
   .runtime/conversation-diagnostics.jsonl --attempt-id <attempt-id>
 ```
 
-The report uses provider-reported cache fields. Zero cached tokens is a valid
-measurement, and older records without a turn purpose remain explicitly
-unscoped.
+Cached-token values are provider-reported. Zero is a valid result, and older
+records without a turn purpose remain explicitly unscoped.
 
-To isolate the LiveKit media path without invoking STT, LLM, or TTS models,
-export the `.env` values and run the small opt-in audio smoke:
+The opt-in LiveKit audio-transport smoke spends provider quota:
 
 ```bash
 set -a
@@ -146,38 +245,28 @@ set +a
 RUN_LIVEKIT_TESTS=1 python -m pytest -q tests/live/test_livekit_audio_transport.py
 ```
 
-## Repository map
+## Repository layout
 
 ```text
-assets/                  packaged deck source, runtime manifest, and renders
+assets/                  normalized presentation packages and slide renders
 backend/src/             domain, application, transport, and provider adapters
-frontend/src/            live browser client and deterministic reducer tests
+docs/                    public concepts, architecture, guides, and handoff
+frontend/src/            live React client and deterministic reducer tests
 expectations/            behavior specified before implementation
-observations/            exit evidence and explicitly deferred issues
+observations/            verified slice evidence and known issues
 scripts/                 active-environment launch and release checks
-tests/                   deterministic contracts and adapter boundaries
+tests/                   deterministic contracts and opt-in live boundaries
 ```
 
-Earlier slice records describe now-retired fake and record/replay scaffolding;
-they remain only as historical evidence, not current setup instructions.
-
-See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and
-the [known-issues ledger](observations/known-issues.md) before changing state,
-playout, navigation, or answer-resolution behavior.
-
-## Privacy and limitations
+## Privacy
 
 `.env`, `.runtime/`, microphone transcripts, and model-context captures are
-ignored and must not be committed. Sanitized evidence belongs under
-`observations/`.
-
-The packaged PPTX is preserved as an authoring source, but generic deck import
-is intentionally not implemented. Provider transcript continuity and acronym
-recognition still have bounded limitations; see KI-002 and KI-007. These limits
-are recorded rather than concealed behind model behavior.
+ignored and must not be committed. Retain recordings privately when they contain
+voice or transcript data; publish only reviewed, intentionally sanitized
+artifacts.
 
 ## License
 
-No software license has been selected yet. The code is source-visible in this
-repository, but redistribution and reuse terms require an explicit owner
-decision before a public release is declared complete.
+No software license has been selected yet. The code is source-visible, but
+redistribution and reuse terms require an explicit owner decision before a public
+release is declared complete.
