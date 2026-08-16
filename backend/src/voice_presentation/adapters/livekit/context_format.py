@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from livekit.agents import llm
 
 from voice_presentation.transport.context_trace import (
     FunctionCallTrace,
     FunctionResultTrace,
     InferenceContextMessage,
+    ModelContextItem,
     ReasoningContextSnapshot,
 )
 
@@ -13,8 +16,16 @@ from voice_presentation.transport.context_trace import (
 def reasoning_context_to_livekit(snapshot: ReasoningContextSnapshot) -> llm.ChatContext:
     """Format provider-neutral context with native LiveKit chat item types."""
 
+    return reasoning_items_to_livekit(snapshot.model_context_items())
+
+
+def reasoning_items_to_livekit(
+    items: Iterable[ModelContextItem],
+) -> llm.ChatContext:
+    """Format an ordered provider-neutral item stream as native LiveKit items."""
+
     context = llm.ChatContext.empty()
-    for item in snapshot.model_context_items():
+    for item in items:
         if isinstance(item, InferenceContextMessage):
             message_kwargs: dict[str, object] = {
                 "role": item.role,
