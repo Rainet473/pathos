@@ -23,8 +23,8 @@ commit rules.
 - Verified playout completion before a narration beat advances.
 - Two-minute inactivity cleanup and a fifteen-minute absolute session ceiling.
 - Private local usage, timing, transcript-context, and lifecycle diagnostics.
-- Deterministic fake and LiveKit record/replay harnesses retained for regression
-  testing, but excluded from the configured production API.
+- Deterministic application/domain coverage for presentation behavior, plus a
+  small opt-in direct LiveKit audio-transport smoke test.
 
 ## Requirements
 
@@ -96,9 +96,9 @@ The configured backend registers only:
 - `GET /api/decks/{deck_id}/slides/{slide_id}/render`
 - `POST /api/live/sessions`
 
-Fake and transport-probe endpoints are available only when tests explicitly
-compose the application with their services. This keeps the evidence ladder
-without presenting internal harnesses as production features.
+There are no fake or transport-probe product endpoints. Tests exercise the same
+application session used by the live runtime, with lightweight collaborators at
+external SDK boundaries.
 
 ## Verification
 
@@ -113,6 +113,16 @@ tests, checks installed Python dependencies, and builds the production web
 bundle. Paid external-provider observations remain opt-in and are not implied by
 an offline green gate.
 
+To isolate the LiveKit media path without invoking STT, LLM, or TTS models,
+export the `.env` values and run the small opt-in audio smoke:
+
+```bash
+set -a
+source .env
+set +a
+RUN_LIVEKIT_TESTS=1 python -m pytest -q tests/live/test_livekit_audio_transport.py
+```
+
 ## Repository map
 
 ```text
@@ -124,6 +134,9 @@ observations/            exit evidence and explicitly deferred issues
 scripts/                 active-environment launch and release checks
 tests/                   deterministic contracts and adapter boundaries
 ```
+
+Earlier slice records describe now-retired fake and record/replay scaffolding;
+they remain only as historical evidence, not current setup instructions.
 
 See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and
 the [known-issues ledger](observations/known-issues.md) before changing state,

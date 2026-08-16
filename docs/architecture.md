@@ -76,7 +76,7 @@ all match. Late callbacks become stale events rather than advancing state.
   diagnostics, and usage records.
 - `adapters/livekit/`: tokens, room orchestration, provider factories, and
   LiveKit event translation.
-- `server/`: production and explicit harness application composition.
+- `server/`: production HTTP application composition.
 
 The larger LiveKit bridge is orchestration code. Launcher lifecycle and agent
 construction are split into `conversation_launcher.py` and
@@ -101,9 +101,15 @@ each adapter. This makes capability differences visible during review.
 ## Production and regression composition
 
 `create_configured_app()` mounts health, deck rendering, and the live session
-bootstrap. Tests can call `create_app()` with a fake store or transport bootstrap
-service to mount internal harness endpoints. The contracts are retained; their
-routes are not accidentally exposed by production configuration.
+bootstrap. `create_app()` accepts only the live conversation service; it cannot
+mount historical fake or record/replay routes. Deterministic regression tests
+target `ApplicationPresentationSession`, the domain controller, and small SDK
+boundary collaborators directly.
+
+The only transport-only diagnostic is an opt-in integration test in
+`tests/live/`. It connects two ordinary LiveKit SDK participants and checks that
+synthetic audio frames cross the room. It has no custom protocol, worker, API
+route, or browser UI and is skipped by the default offline gate.
 
 ## Content package
 

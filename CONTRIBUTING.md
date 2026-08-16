@@ -42,9 +42,10 @@ packages. Extract a base class only when behavior and invariants are genuinely
 shared; use composition or dedicated modules when option names hide different
 semantics. Preserve established import contracts when moving modules.
 
-Keep production composition small. Fake and transport-probe implementations are
-valuable regression harnesses, but should be mounted only by explicit test or
-development composition.
+Keep production composition small. Deterministic tests should target the real
+application/domain contracts with lightweight boundary collaborators; do not
+add a second fake product or transport-probe UI merely to make integration code
+testable.
 
 ## Secrets and evidence
 
