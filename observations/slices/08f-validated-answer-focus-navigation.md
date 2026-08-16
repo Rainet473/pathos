@@ -67,9 +67,18 @@ spoken follow-up -> validated plan with focus slide -> question slide visible
   All 36 frontend tests passed, the TypeScript/Vite production build completed
   with its existing chunk-size warning, and `pip check` found no broken
   requirements.
-- Live post-change focus observation remains open. The entry attempt proved that
-  Gemma emits a validated `braking-abs` focus proposal, but it ran before this
-  slice applied that proposal to visible state.
+- Live post-change observation: repository-owner browser test on attempt
+  `6729e607-f271-487c-9859-bfdf61c5d44b` used "Explain ABS and then continue
+  your presentation." The supporting `braking-abs` slide appeared for the
+  answer, then the original `control-loop` narration slide was restored and the
+  preserved presentation continued as expected.
+- Runtime corroboration: the planner accepted `braking-abs` as both supporting
+  and focus slide after one search in 2.003 seconds; the answer transcript was
+  grounded in the two cited ABS passages; narration resumed on the preserved
+  control-loop beat; and the 48.635-second attempt ended with outcome
+  `completed`. The runtime JSONL does not persist the browser's domain-event
+  list, so the visual focus/restore judgment is the human observation while
+  event ordering remains covered deterministically.
 
 ## Fallback or rollback
 
@@ -79,5 +88,4 @@ answer, waiting, and continuation behavior.
 ## Next highest risk
 
 Robustness and release evidence: acronym transcription, graceful fallback after
-malformed/citation failures, mode variation, cancellation, caching, and live
-cross-slide observation.
+malformed/citation failures, mode variation, cancellation, and caching.

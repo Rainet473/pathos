@@ -102,5 +102,5 @@ manual browse while waiting -> visible slide = user choice
 - [x] Tests were written before implementation.
 - [x] New tests were observed failing for the intended reason.
 - [x] Deterministic suite passes offline.
-- [ ] A live cross-slide focus case was observed and evidence was recorded.
+- [x] A live cross-slide focus case was observed and evidence was recorded.
 - [x] Deferred risks are explicit.
