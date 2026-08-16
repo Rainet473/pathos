@@ -184,7 +184,6 @@ def create_configured_app() -> FastAPI:
     from voice_presentation.adapters.livekit.conversation import (
         LiveKitConversationSessionLauncher,
     )
-    from voice_presentation.adapters.livekit.probe import LiveKitProbeSessionLauncher
     from voice_presentation.adapters.livekit.tokens import LiveKitTokenIssuer
     from voice_presentation.transport.diagnostics import (
         JsonlConversationDiagnosticLedger,
@@ -212,7 +211,6 @@ def create_configured_app() -> FastAPI:
         raise RuntimeError("LLM_CONTEXT_LOG must not be empty")
     issuer = LiveKitTokenIssuer(api_key=api_key, api_secret=api_secret)
     usage_ledger = JsonlUsageLedger(usage_log)
-    launcher = LiveKitProbeSessionLauncher(usage_ledger=usage_ledger)
     selected_provider = _selected_voice_provider_name()
     google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -243,15 +241,7 @@ def create_configured_app() -> FastAPI:
             ),
             instructions=APPLICATION_PRESENTATION_INSTRUCTIONS,
         )
-    return create_app(
-        ProbeBootstrapService(
-            server_url=server_url,
-            token_issuer=issuer,
-            session_launcher=launcher,
-        ),
-        fake_session_store=_slice_two_fake_store(),
-        conversation_service=conversation_service,
-    )
+    return create_app(conversation_service=conversation_service)
 
 
 def create_offline_app() -> FastAPI:

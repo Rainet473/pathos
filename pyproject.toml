@@ -12,13 +12,17 @@ dependencies = [
   "livekit==1.1.8",
   "livekit-agents==1.5.17",
   "livekit-api==1.2.0",
-  "livekit-plugins-google==1.5.17",
-  "livekit-plugins-openai==1.5.17",
   "pydantic==2.13.4",
   "uvicorn[standard]==0.51.0",
 ]
 
 [project.optional-dependencies]
+gemini-realtime = [
+  "livekit-plugins-google==1.5.17",
+]
+openai-realtime = [
+  "livekit-plugins-openai==1.5.17",
+]
 test = [
   "httpx2==2.9.0",
   "pytest==9.1.1",

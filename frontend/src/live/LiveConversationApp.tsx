@@ -144,7 +144,7 @@ export default function LiveConversationApp() {
     return (
       <main className="probe-shell live-shell">
         <section className="probe-card live-card" aria-live="polite">
-          <p className="eyebrow">Slice 4 · one real presentation action</p>
+          <p className="eyebrow">Interruptible voice presentation</p>
           <h1>Live voice presentation</h1>
           <p className="lede">
             Start connects the microphone and selected LiveKit pipeline. The page remains quiet and disconnected until then.
@@ -185,10 +185,9 @@ export default function LiveConversationApp() {
     <main className="presentation-shell live-presentation-shell">
       <header className="presentation-header">
         <div>
-          <p className="eyebrow">Slice 4 · LiveKit inference pipeline</p>
-          <p className="mode-note">Microphone + Deepgram Nova-3 + Gemma 4 + Inworld TTS</p>
+          <p className="eyebrow">Live presentation</p>
+          <p className="mode-note">LiveKit Inference · Deepgram Nova-3 + Gemma 4 + Inworld TTS</p>
         </div>
-        <a href="/">Open deterministic presentation</a>
       </header>
 
       <section className="presentation-grid" aria-live="polite">

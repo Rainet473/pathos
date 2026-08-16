@@ -42,7 +42,7 @@ def test_offline_session_api_is_quiet_until_start_and_needs_no_credentials(monke
     assert body["slides"][0]["id"] == "engine-braking"
 
 
-def test_configured_app_exposes_offline_sessions_without_using_livekit(
+def test_configured_app_does_not_expose_offline_session_harness(
     monkeypatch, tmp_path
 ):
     usage_log = tmp_path / "livekit-usage.jsonl"
@@ -54,8 +54,7 @@ def test_configured_app_exposes_offline_sessions_without_using_livekit(
     with TestClient(create_configured_app()) as client:
         response = client.post("/api/fake/sessions")
 
-    assert response.status_code == 201
-    assert response.json()["state"]["phase"] == "ready"
+    assert response.status_code == 404
     assert not usage_log.exists()
 
 

@@ -1,3 +1,11 @@
+"""Translate one LiveKit room into application-owned presentation actions.
+
+Launcher lifecycle and Agent construction live in adjacent modules. This bridge
+keeps correlated room events, transcripts, playout, and presentation callbacks
+together because they share one active-session state and cancellation boundary.
+Historical imports are re-exported below for compatibility.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,11 +14,26 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any, Awaitable, Protocol
+from typing import Any, Awaitable
 
 from livekit import rtc
 
+from voice_presentation.adapters.livekit.conversation_agent import (
+    AgentConstructor,
+    HttpContextFactory,
+    PresentationAgentConstructor,
+    default_agent_constructor as _default_agent_constructor,
+    default_http_context_factory as _default_http_context_factory,
+    default_presentation_agent_constructor as _default_presentation_agent_constructor,
+)
+from voice_presentation.adapters.livekit.conversation_launcher import (
+    ConversationFactory,
+    ConversationSessionAlreadyActive,
+    ConversationSessionLaunchError,
+    LiveKitConversationSessionLauncher,
+    PresentationSessionFactory,
+    RunnableConversationSession,
+)
 from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
     GenerationDirective,
@@ -33,7 +56,6 @@ from voice_presentation.transport.lifecycle import (
     ConversationLifecycleReason,
     ConversationLifecycleUpdate,
 )
-from voice_presentation.transport.usage import NullUsageLedger, UsageLedger, UsageRecord
 from voice_presentation.transport.presentation import (
     PRESENTATION_COMMAND_TOPIC,
     PRESENTATION_STATE_TOPIC,
@@ -45,220 +67,11 @@ from voice_presentation.transport.transcript import (
     ConversationTranscriptEntry,
     ConversationTranscriptUpdate,
 )
-from voice_presentation.voice.sessions import VoiceBackendIdentity, VoiceSessionFactory
+from voice_presentation.voice.sessions import VoiceSessionFactory
 
 logger = logging.getLogger(__name__)
 
 CONVERSATION_DIAGNOSTICS_TOPIC = "voice-conversation.diagnostics.v1"
-
-
-class ConversationSessionAlreadyActive(RuntimeError):
-    """Raised when the same live attempt is launched more than once."""
-
-
-class ConversationSessionLaunchError(RuntimeError):
-    """Raised when a live worker cannot become ready for the browser."""
-
-
-class RunnableConversationSession(Protocol):
-    @property
-    def usage_outcome(self) -> str: ...
-
-    async def run(self, ready: asyncio.Event) -> None: ...
-
-
-ConversationFactory = Callable[
-    [ConversationSessionSpec, VoiceSessionFactory], RunnableConversationSession
-]
-PresentationSessionFactory = Callable[[str], ApplicationPresentationSession]
-AgentConstructor = Callable[..., object]
-PresentationAgentConstructor = Callable[..., object]
-HttpContextFactory = Callable[[], contextlib.AbstractAsyncContextManager[object]]
-PrepareUserTurn = Callable[[str], Awaitable[str]]
-
-
-def _default_agent_constructor(**kwargs: Any) -> object:
-    from livekit.agents import Agent
-
-    return Agent(**kwargs)
-
-
-def _default_presentation_agent_constructor(
-    *,
-    instructions: str,
-    prepare_user_turn: PrepareUserTurn,
-) -> object:
-    from livekit.agents import Agent
-
-    class ApplicationControlledPresentationAgent(Agent):
-        async def on_user_turn_completed(
-            self,
-            turn_ctx: object,
-            new_message: object,
-        ) -> None:
-            question = str(getattr(new_message, "text_content", "")).strip()
-            answer_instructions = await prepare_user_turn(question)
-            turn_ctx.add_message(role="developer", content=answer_instructions)
-
-    return ApplicationControlledPresentationAgent(
-        instructions=instructions,
-        tools=[],
-    )
-
-
-def _default_http_context_factory() -> contextlib.AbstractAsyncContextManager[object]:
-    from livekit.agents.utils import http_context
-
-    return http_context.open()
-
-
-class LiveKitConversationSessionLauncher:
-    def __init__(
-        self,
-        *,
-        voice_session_factory: VoiceSessionFactory,
-        conversation_factory: ConversationFactory | None = None,
-        ready_timeout_seconds: float = 12,
-        usage_ledger: UsageLedger | None = None,
-        diagnostic_ledger: ConversationDiagnosticLedger | None = None,
-        context_ledger: InferenceContextLedger | None = None,
-        presentation_session_factory: PresentationSessionFactory | None = None,
-    ) -> None:
-        if ready_timeout_seconds <= 0:
-            raise ValueError("ready timeout must be positive")
-        self._voice_session_factory = voice_session_factory
-        self._conversation_factory = conversation_factory
-        self._ready_timeout_seconds = ready_timeout_seconds
-        self._usage_ledger = usage_ledger or NullUsageLedger()
-        self._diagnostic_ledger = (
-            diagnostic_ledger or NullConversationDiagnosticLedger()
-        )
-        self._context_ledger = context_ledger or NullInferenceContextLedger()
-        self._presentation_session_factory = presentation_session_factory
-        self._tasks: dict[str, asyncio.Task[None]] = {}
-
-    @property
-    def identity(self) -> VoiceBackendIdentity:
-        return self._voice_session_factory.identity
-
-    async def launch(self, session: ConversationSessionSpec) -> None:
-        self._discard_finished()
-        existing = self._tasks.get(session.attempt_id)
-        if existing is not None and not existing.done():
-            raise ConversationSessionAlreadyActive(
-                f"attempt {session.attempt_id} is already active"
-            )
-
-        ready = asyncio.Event()
-        if self._conversation_factory is None:
-            presentation_session = None
-            if self._presentation_session_factory is not None:
-                presentation_session = self._presentation_session_factory(
-                    session.attempt_id
-                )
-            runner = LiveKitConversationSession(
-                session,
-                self._voice_session_factory,
-                diagnostic_ledger=self._diagnostic_ledger,
-                context_ledger=self._context_ledger,
-                presentation_session=presentation_session,
-            )
-        else:
-            runner = self._conversation_factory(session, self._voice_session_factory)
-        task = asyncio.create_task(
-            self._run_and_record(session, runner, ready),
-            name=f"conversation-{session.attempt_id}",
-        )
-        self._tasks[session.attempt_id] = task
-        task.add_done_callback(
-            lambda finished, attempt_id=session.attempt_id: self._on_session_finished(
-                attempt_id, finished
-            )
-        )
-        ready_waiter = asyncio.create_task(ready.wait())
-        done, _ = await asyncio.wait(
-            {task, ready_waiter},
-            timeout=self._ready_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if ready_waiter in done and ready.is_set():
-            return
-
-        ready_waiter.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await ready_waiter
-
-        if task in done:
-            error = task.exception()
-            raise ConversationSessionLaunchError(
-                "live worker failed before becoming ready"
-            ) from error
-
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        self._tasks.pop(session.attempt_id, None)
-        raise ConversationSessionLaunchError(
-            "live worker did not become ready in time"
-        )
-
-    async def _run_and_record(
-        self,
-        session: ConversationSessionSpec,
-        runner: RunnableConversationSession,
-        ready: asyncio.Event,
-    ) -> None:
-        started_at = datetime.now(UTC)
-        started_monotonic = time.monotonic()
-        outcome = "completed"
-        try:
-            await runner.run(ready)
-            outcome = runner.usage_outcome
-        except asyncio.CancelledError:
-            outcome = "cancelled"
-            raise
-        except Exception:
-            outcome = "failed"
-            raise
-        finally:
-            record = UsageRecord.from_duration(
-                attempt_id=session.attempt_id,
-                started_at=started_at,
-                duration_seconds=max(0, time.monotonic() - started_monotonic),
-                outcome=outcome,
-                browser_participant_minutes_upper_bound=1,
-            )
-            try:
-                self._usage_ledger.record(record)
-            except Exception:
-                logger.exception("Could not append the local LiveKit usage ledger")
-
-    async def aclose(self) -> None:
-        tasks = list(self._tasks.values())
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.clear()
-
-    def _discard_finished(self) -> None:
-        for attempt_id, task in list(self._tasks.items()):
-            if task.done():
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    task.result()
-                self._tasks.pop(attempt_id, None)
-
-    def _on_session_finished(
-        self, attempt_id: str, task: asyncio.Task[None]
-    ) -> None:
-        if self._tasks.get(attempt_id) is task:
-            self._tasks.pop(attempt_id, None)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            logger.error("Live conversation session failed", exc_info=error)
 
 
 class LiveKitConversationSession:
