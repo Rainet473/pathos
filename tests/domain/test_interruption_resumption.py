@@ -74,8 +74,13 @@ def test_answer_and_continue_restores_slide_and_replays_same_beat(deck_payload):
     assert controller.state.presentation_cursor == saved_cursor
     assert controller.state.visible_slide_id == saved_cursor.slide_id
     assert controller.state.active_turn_id == "narration-2"
-    assert "presentation_resumed" in event_types(events)
-    assert "beat_selected" in event_types(events)
+    assert event_types(events) == [
+        "answer_completed",
+        "slide_changed",
+        "presentation_resumed",
+        "beat_selected",
+    ]
+    assert events[1].slide_change_reason.value == "restore"
 
 
 def test_explicit_continue_from_waiting_restores_original_slide(deck_payload):

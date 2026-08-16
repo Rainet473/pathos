@@ -384,7 +384,7 @@ class ApplicationPresentationSession:
             self._controller.begin_answer(
                 turn_id=turn_id,
                 continuation_preference=preference,
-                question_slide_id=None,
+                question_slide_id=plan.focus_slide_id,
             )
         )
         events.append(

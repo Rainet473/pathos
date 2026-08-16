@@ -14,7 +14,7 @@ from voice_presentation.domain.contracts import (
     PresentationPhase,
     ScopeMode,
 )
-from voice_presentation.domain.events import DomainEventType
+from voice_presentation.domain.events import DomainEventType, SlideChangeReason
 from voice_presentation.domain.provenance import (
     GroundingSource,
     LogicalTurn,
@@ -212,14 +212,102 @@ def test_presentation_plan_resolves_only_accepted_search_evidence_and_waits():
     assert directive is not None
     assert hit.text in directive.instructions
     assert directive.evidence_ids == (hit.evidence_id,)
-    assert accepted.view.state.visible_slide_id == "control-loop"
+    assert accepted.view.state.presentation_cursor.slide_id == "control-loop"
+    assert accepted.view.state.visible_slide_id == hit.slide_id
+    assert [event.type for event in accepted.view.events] == [
+        DomainEventType.SLIDE_CHANGED,
+        DomainEventType.QUESTION_CLASSIFIED,
+    ]
+    assert accepted.view.events[0].slide_change_reason is SlideChangeReason.QUESTION
     session.playout_started(turn_id=directive.turn_id)
     waiting = session.playout_finished(
         turn_id=directive.turn_id,
         interrupted=False,
     )
     assert waiting.view.state.phase is PresentationPhase.WAITING
+    assert waiting.view.state.presentation_cursor.slide_id == "control-loop"
+    assert waiting.view.state.visible_slide_id == hit.slide_id
     assert waiting.view.committed_beats == ()
+
+    resumed = session.continue_presentation()
+
+    assert resumed.view.state.phase is PresentationPhase.PRESENTING
+    assert resumed.view.state.visible_slide_id == "control-loop"
+    assert resumed.generation is not None
+    assert resumed.generation.cursor.slide_id == "control-loop"
+    assert [event.type for event in resumed.view.events] == [
+        DomainEventType.SLIDE_CHANGED,
+        DomainEventType.PRESENTATION_RESUMED,
+        DomainEventType.BEAT_SELECTED,
+    ]
+    assert resumed.view.events[0].slide_change_reason is SlideChangeReason.RESTORE
+
+
+def test_focused_answer_and_continue_restores_before_resuming_once():
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        "Explain ABS, then continue your presentation.",
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+    search = MaterialSearch(session.deck).search(
+        SearchMaterialInput(
+            keywords=("ABS",),
+            phrases=("wheel lock",),
+            slide_ids=("braking-abs",),
+            include_neighbors=True,
+            max_results=5,
+        )
+    )
+    hit = next(
+        candidate
+        for candidate in search.hits
+        if candidate.evidence_id.endswith("braking-abs.narration.3")
+    )
+    plan = ValidatedAnswerPlan(
+        plan_id="answer-plan-live-focus",
+        follow_up_turn_id=request.context.follow_up_turn_id,
+        session_version=request.context.session_version,
+        continuation_preference=request.context.continuation_preference,
+        scope=ScopeMode.GROUNDED,
+        grounding_source=GroundingSource.PRESENTATION,
+        answer_brief="Explain that ABS modulates pressure near wheel lock.",
+        evidence_ids=(hit.evidence_id,),
+        supporting_slide_ids=(hit.slide_id,),
+        focus_slide_id=hit.slide_id,
+    )
+
+    accepted = session.accept_answer_plan(
+        plan,
+        provenance=ledger,
+        search_results=(search,),
+    )
+
+    directive = accepted.generation
+    assert directive is not None
+    assert accepted.view.state.presentation_cursor.slide_id == "control-loop"
+    assert accepted.view.state.visible_slide_id == "braking-abs"
+    assert accepted.view.events[0].slide_change_reason is SlideChangeReason.QUESTION
+
+    session.playout_started(turn_id=directive.turn_id)
+    resumed = session.playout_finished(
+        turn_id=directive.turn_id,
+        interrupted=False,
+    )
+
+    assert resumed.view.state.phase is PresentationPhase.PRESENTING
+    assert resumed.view.state.presentation_cursor.slide_id == "control-loop"
+    assert resumed.view.state.visible_slide_id == "control-loop"
+    assert resumed.generation is not None
+    assert resumed.generation.cursor.slide_id == "control-loop"
+    assert [event.type for event in resumed.view.events] == [
+        DomainEventType.ANSWER_COMPLETED,
+        DomainEventType.SLIDE_CHANGED,
+        DomainEventType.PRESENTATION_RESUMED,
+        DomainEventType.BEAT_SELECTED,
+    ]
+    assert resumed.view.events[1].slide_change_reason is SlideChangeReason.RESTORE
+    assert resumed.view.committed_beats == ()
 
 
 def test_stale_plan_and_planning_failure_never_create_answer_generation():

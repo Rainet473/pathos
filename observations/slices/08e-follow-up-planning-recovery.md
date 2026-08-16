@@ -77,9 +77,12 @@ spoken follow-up -> bounded turn stabilization -> silent planner
   the retained backend suite reports 261 passed and two opt-in live tests skipped.
   The frontend still reports 36 tests passed, the production build completes,
   and `pip check` reports no broken requirements.
-- No post-fix provider or acoustic run was spent automatically. The live ABS and
-  AWS answer-and-continue cases remain the exit evidence needed before starting
-  answer-focus navigation.
+- Post-fix live gate: attempt `3536b0b3-9285-4934-9290-9c60342a7c30`
+  completed in 130.429 seconds. One `ABS` utterance was transcribed as `APS` and
+  ended in controlled `invalid_tool_arguments` after 12.905 seconds, proving the
+  new deadline was active. AWS produced one controlled out-of-scope response and
+  resumed. The repeated, correctly transcribed ABS request searched current
+  `braking-abs` evidence, answered, and resumed after verified playout.
 
 ## Fallback or rollback
 
@@ -88,5 +91,6 @@ allow an unvalidated answer or model-owned continuation to mask a failed fix.
 
 ## Next highest risk
 
-After this recovery gate, rerun the bounded live ABS/AWS cases. Only then advance
-to validated answer-focus navigation.
+The next seam is validated answer-focus navigation. Acronym transcription and
+graceful speech after malformed or citation-invalid planning remain deferred to
+the robustness slice.

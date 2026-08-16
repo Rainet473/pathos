@@ -117,3 +117,39 @@ but must remain visible during later breadth and release work.
 - **Offline mitigation:** logical-turn provenance now retains actual interrupted
   assistant text, the silent planner can cite that turn or bounded deck evidence,
   and only a current application-validated plan can reach answer generation.
+
+## KI-007 — Spoken acronyms can be transcribed as nearby letter sequences
+
+- **Status:** deferred to reasoning robustness and phrase-variation evaluation.
+- **Observed:** 17 August 2026, attempt
+  `3536b0b3-9285-4934-9290-9c60342a7c30`.
+- **Behavior:** the first spoken `ABS` request arrived as `APS`. The planner
+  searched the incorrect acronym twice and found no presentation evidence. A
+  repeated utterance transcribed as `a b s`, normalized to the correct search,
+  and completed successfully.
+- **Impact:** the bounded reasoning path cannot recover domain intent when the
+  authoritative STT text changes a short acronym.
+- **Constraint:** do not silently rewrite arbitrary acronyms. Any correction must
+  be deck-bounded, observable, and preserve the original transcript.
+- **Later acceptance case:** evaluate `ABS`, `A B S`, and nearby letter errors;
+  either resolve against a unique authored deck term or ask one clarification.
+
+## KI-008 — Recoverable planner validation failures can produce no spoken answer
+
+- **Status:** deferred to the robustness slice; desired production behavior is
+  now explicit.
+- **Observed:** 17 August 2026, attempts
+  `f15cc0d8-9222-441f-a91c-74217dbcacd5` and
+  `3536b0b3-9285-4934-9290-9c60342a7c30`.
+- **Behavior:** unknown citations or malformed terminal arguments can exhaust the
+  bounded planner and leave only a visible failure, even when a useful answer
+  could still be delivered safely.
+- **Desired behavior:** first attempt bounded correction. If support still cannot
+  be validated, discard citations and focus navigation, then deliver a disclosed
+  model-knowledge or boundary response when the request is safe and answerable.
+- **Constraint:** graceful degradation must create a newly valid application-owned
+  directive; it must never speak an invalid plan, preserve unsupported focus, or
+  bypass clarification and safety boundaries.
+- **Later acceptance case:** citation and schema failures each produce at most one
+  safe spoken fallback, retain default/explicit continuation semantics, and never
+  mutate the semantic cursor.
