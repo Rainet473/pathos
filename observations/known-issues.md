@@ -5,7 +5,8 @@ but must remain visible during later breadth and release work.
 
 ## KI-001 — Answer-and-continue response asks for redundant permission
 
-- **Status:** prevented offline; live follow-up verification remains blocked.
+- **Status:** closed for the current assignment. The user accepted the offline
+  prevention and subsequent live answer-and-continue behavior on 17 August 2026.
 - **Observed:** 16 August 2026, attempt
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
 - **Behavior:** after the listener explicitly authorized continuation, the answer
@@ -16,7 +17,7 @@ but must remain visible during later breadth and release work.
 - **Likely seam:** the answer generation directive forbids model-owned navigation
   but does not tell the model that continuation is already authorized and will be
   performed by the application.
-- **Later acceptance case:** an answer with `continue_after_answer` contains no
+- **Regression case:** an answer with `continue_after_answer` contains no
   permission-seeking or promise to wait; application-owned resumption still occurs
   only after verified answer playout.
 - **Offline mitigation:** the validated-plan answer directive now explicitly
@@ -48,7 +49,8 @@ but must remain visible during later breadth and release work.
 
 ## KI-003 — Motorcycle paraphrases can be falsely marked out of scope
 
-- **Status:** mitigated offline; live verification pending.
+- **Status:** closed for the current assignment. The user accepted the bounded
+  reasoning behavior after live testing on 17 August 2026.
 - **Observed:** 16 August 2026, attempts
   `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` and
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
@@ -60,22 +62,27 @@ but must remain visible during later breadth and release work.
 - **Offline mitigation:** Slice 5b adds the six-slide evaluation, bounded
   gear/rev/braking aliases, concept-weighted matching, and a two-term grounding
   floor. The fixed cases and four recorded paraphrases now pass deterministically.
-- **Remaining acceptance case:** repeat the relevant spoken variants in a bounded
-  live full-deck observation and verify that STT wording still resolves to the
-  intended mode. Generated prose must remain unable to choose navigation.
+- **Regression case:** retain the spoken variants in future bounded full-deck
+  observations. Generated prose must remain unable to choose navigation.
 
-## KI-004 — Manual navigation during answer playout is deferred
+## KI-004 — Manual navigation during answer playout
 
-- **Status:** deferred to multi-modal interaction hardening.
-- **Behavior:** the navigable deck is enabled before narration, during narration,
-  while waiting, and after completion. It is intentionally disabled while an
-  answer is speaking in the first manual-navigation slice.
-- **Reason:** interrupting an answer to browse raises a separate product choice:
-  discard the answer, preserve a resumable answer cursor, or treat the slide
-  change as contextual input to a replacement answer. That transition should be
-  specified rather than inferred from narration semantics.
-- **Later acceptance case:** choose and test one explicit answer-interruption
-  policy, including late/stale provider callbacks and repeated slide selections.
+- **Status:** implemented and verified offline; one acoustic browser acceptance
+  run remains in the public demo rubric.
+- **Behavior:** once answer playout is active, the deck controls remain available
+  and disclose that browsing stops the answer. A valid new selection interrupts
+  and abandons the answer, preserves the semantic cursor, clears any automatic
+  continuation permission, and enters waiting. Continue restores and replays the
+  preserved narration beat. Browsing after a post-completion answer remains
+  completed.
+- **Safety:** an unknown slide is rejected and selecting the already visible
+  slide is a no-op before provider audio is touched. Late or duplicate answer
+  completion callbacks cannot resume narration or mutate state.
+- **Verified:** domain, application, LiveKit bridge, and frontend policy tests
+  cover ordinary answers, answer-and-continue, invalid and duplicate targets,
+  stale callbacks, preserved-cursor replay, and post-completion behavior.
+- **Remaining acceptance case:** run step 4 of `docs/demo-script.md` with live
+  audio and confirm that speech stops promptly and the explanatory copy is clear.
 
 ## KI-005 — Authoring-format import is not implemented
 
@@ -95,7 +102,8 @@ but must remain visible during later breadth and release work.
 
 ## KI-006 — Referential follow-up questions can lose their antecedent
 
-- **Status:** mitigated offline; live follow-up verification remains blocked.
+- **Status:** closed for the current assignment. The user accepted the bounded
+  provenance behavior after live testing on 17 August 2026.
 - **Observed:** 16 August 2026, attempt
   `35a5be63-5af1-447d-871d-e76ce8cdc3b8`.
 - **Behavior:** short follow-ups such as “Can you explain me once again how this
@@ -110,7 +118,7 @@ but must remain visible during later breadth and release work.
   antecedent or explicit follow-up identity.
 - **Constraint:** do not make generated prose responsible for navigation or
   silently let the provider override the disclosed answer mode.
-- **Later acceptance case:** resolve a bounded recent antecedent into explicit
+- **Regression case:** resolve a bounded recent antecedent into explicit
   application input, prove the same question is classified consistently after
   interruption and manual navigation, and retain the current deterministic
   transition checks.

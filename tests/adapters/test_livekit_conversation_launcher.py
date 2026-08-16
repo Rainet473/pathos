@@ -159,7 +159,7 @@ def _spec():
 
 @pytest.mark.offline
 def test_launcher_exposes_identity_rejects_duplicate_and_records_usage():
-    from voice_presentation.adapters.livekit.conversation import (
+    from voice_presentation.adapters.livekit.conversation_launcher import (
         ConversationSessionAlreadyActive,
         LiveKitConversationSessionLauncher,
     )
@@ -193,7 +193,7 @@ def test_launcher_exposes_identity_rejects_duplicate_and_records_usage():
 
 @pytest.mark.offline
 def test_launcher_reports_provider_failure_before_ready():
-    from voice_presentation.adapters.livekit.conversation import (
+    from voice_presentation.adapters.livekit.conversation_launcher import (
         ConversationSessionLaunchError,
         LiveKitConversationSessionLauncher,
     )

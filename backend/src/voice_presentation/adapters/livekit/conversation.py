@@ -3,7 +3,6 @@
 Launcher lifecycle and Agent construction live in adjacent modules. This bridge
 keeps correlated room events, transcripts, playout, and presentation callbacks
 together because they share one active-session state and cancellation boundary.
-Historical imports are re-exported below for compatibility.
 """
 
 from __future__ import annotations
@@ -26,14 +25,6 @@ from voice_presentation.adapters.livekit.conversation_agent import (
     default_http_context_factory as _default_http_context_factory,
     default_presentation_agent_constructor as _default_presentation_agent_constructor,
 )
-from voice_presentation.adapters.livekit.conversation_launcher import (
-    ConversationFactory,
-    ConversationSessionAlreadyActive,
-    ConversationSessionLaunchError,
-    LiveKitConversationSessionLauncher,
-    PresentationSessionFactory,
-    RunnableConversationSession,
-)
 from voice_presentation.adapters.livekit.silent_planner import LiveKitSilentPlanner
 from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
@@ -41,6 +32,10 @@ from voice_presentation.application.live_presentation import (
     GenerationDirective,
     PresentationActionResult,
 )
+from voice_presentation.application.spoken_commands import (
+    is_spoken_continue_command,
+)
+from voice_presentation.domain.contracts import PresentationPhase
 from voice_presentation.domain.reasoning import PlanningStage, PlanningStatus
 from voice_presentation.transport.conversation import ConversationSessionSpec
 from voice_presentation.transport.context_trace import (
@@ -588,6 +583,21 @@ class LiveKitConversationSession:
                     await self._publish_presentation(started)
                 await self._settle_binding_locked(binding, interrupted=True)
 
+            phase = self._presentation_session.view().state.phase
+            if (
+                phase
+                in {
+                    PresentationPhase.INTERRUPTED,
+                    PresentationPhase.WAITING,
+                }
+                and is_spoken_continue_command(question)
+            ):
+                result = self._presentation_session.continue_presentation()
+                await self._publish_presentation(result)
+                if result.generation is not None:
+                    self._execute_generation(result.generation)
+                return None
+
             if self._follow_up_planner is None:
                 result = self._presentation_session.prepare_question(question)
                 if result.generation is None:
@@ -800,6 +810,20 @@ class LiveKitConversationSession:
         if self._presentation_session is None:
             return
         async with self._presentation_lock:
+            slide_id = slide_id.strip()
+            try:
+                self._presentation_session.deck.slide(slide_id)
+            except ValueError:
+                logger.warning(
+                    "Ignored navigation to an unknown slide",
+                    extra={"slide_id": slide_id},
+                )
+                return
+            if (
+                self._presentation_session.view().state.visible_slide_id
+                == slide_id
+            ):
+                return
             binding = self._active_speech
             if binding is not None and binding.turn_id not in self._settled_turns:
                 binding.handle.interrupt()

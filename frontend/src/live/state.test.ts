@@ -17,6 +17,7 @@ describe("live conversation state", () => {
       backend: null,
       transcript: [],
       presentation: null,
+      answerPath: { activeStep: null, visited: [] },
       failure: null,
       endReason: null,
       needsAudioUnlock: false,
@@ -51,6 +52,35 @@ describe("live conversation state", () => {
     });
 
     expect(state.presentation).toEqual(update.view);
+  });
+
+  it("retains the observable stages followed by the current answer", () => {
+    let state = reduceLiveState(initialLiveState(), {
+      type: "start_requested",
+      attemptId: attempt,
+    });
+    state = reduceLiveState(state, { type: "connected", attemptId: attempt, backend });
+
+    state = reduceLiveState(state, {
+      type: "presentation",
+      attemptId: attempt,
+      update: presentationUpdate(4, "understanding", "interrupted"),
+    });
+    state = reduceLiveState(state, {
+      type: "presentation",
+      attemptId: attempt,
+      update: presentationUpdate(4, "preparing", "interrupted"),
+    });
+    state = reduceLiveState(state, {
+      type: "presentation",
+      attemptId: attempt,
+      update: presentationUpdate(5, null, "answering"),
+    });
+
+    expect(state.answerPath).toEqual({
+      activeStep: "answering",
+      visited: ["understanding", "preparing", "answering"],
+    });
   });
 
   it("retains the latest normalized latency stages for the active attempt", () => {
@@ -225,7 +255,11 @@ describe("live conversation state", () => {
   });
 });
 
-function presentationUpdate(sessionVersion: number) {
+function presentationUpdate(
+  sessionVersion: number,
+  planningStage: "understanding" | "searching" | "preparing" | null = null,
+  phase: "presenting" | "interrupted" | "answering" = "presenting",
+) {
   return {
     attemptId: attempt,
     emittedAt: "2026-08-16T10:00:00Z",
@@ -235,7 +269,7 @@ function presentationUpdate(sessionVersion: number) {
       title: "How a Motorcycle Responds to Your Controls",
       state: {
         sessionVersion,
-        phase: "presenting" as const,
+        phase,
         presentationCursor: { slideId: "engine-braking", beatIndex: 0 },
         visibleSlideId: "engine-braking",
         activeTurnId: "narration-1",
@@ -253,7 +287,7 @@ function presentationUpdate(sessionVersion: number) {
       events: [],
       scopeMode: null,
       groundingSource: null,
-      planningStage: null,
+      planningStage,
       planningFailureCode: null,
       planningRecoveryCode: null,
       committedBeats: [],
