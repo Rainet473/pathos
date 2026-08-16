@@ -17,6 +17,11 @@ from voice_presentation.application.live_presentation import (
     PresentationActionResult,
 )
 from voice_presentation.transport.conversation import ConversationSessionSpec
+from voice_presentation.transport.context_trace import (
+    InferenceContextLedger,
+    InferenceContextTrace,
+    NullInferenceContextLedger,
+)
 from voice_presentation.transport.diagnostics import (
     ConversationDiagnosticEvent,
     ConversationDiagnosticLedger,
@@ -116,6 +121,7 @@ class LiveKitConversationSessionLauncher:
         ready_timeout_seconds: float = 12,
         usage_ledger: UsageLedger | None = None,
         diagnostic_ledger: ConversationDiagnosticLedger | None = None,
+        context_ledger: InferenceContextLedger | None = None,
         presentation_session_factory: PresentationSessionFactory | None = None,
     ) -> None:
         if ready_timeout_seconds <= 0:
@@ -127,6 +133,7 @@ class LiveKitConversationSessionLauncher:
         self._diagnostic_ledger = (
             diagnostic_ledger or NullConversationDiagnosticLedger()
         )
+        self._context_ledger = context_ledger or NullInferenceContextLedger()
         self._presentation_session_factory = presentation_session_factory
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -153,6 +160,7 @@ class LiveKitConversationSessionLauncher:
                 session,
                 self._voice_session_factory,
                 diagnostic_ledger=self._diagnostic_ledger,
+                context_ledger=self._context_ledger,
                 presentation_session=presentation_session,
             )
         else:
@@ -267,6 +275,7 @@ class LiveKitConversationSession:
         ),
         http_context_factory: HttpContextFactory = _default_http_context_factory,
         diagnostic_ledger: ConversationDiagnosticLedger | None = None,
+        context_ledger: InferenceContextLedger | None = None,
         transcript_clock: Callable[[], float] = time.monotonic,
         transcript_merge_window_seconds: float = 1.5,
         idle_timeout_seconds: float | None = None,
@@ -305,6 +314,11 @@ class LiveKitConversationSession:
         self._diagnostics = ConversationDiagnostics(
             attempt_id=spec.attempt_id,
             ledger=diagnostic_ledger,
+        )
+        self._context_trace = InferenceContextTrace(
+            attempt_id=spec.attempt_id,
+            stable_instructions=spec.instructions,
+            ledger=context_ledger,
         )
         self._transcript_clock = transcript_clock
         self._transcript_merge_window_seconds = transcript_merge_window_seconds
@@ -516,9 +530,17 @@ class LiveKitConversationSession:
                 self._queue_diagnostic(
                     self._diagnostics.record_turn_metrics(metrics)
                 )
-            if str(getattr(item, "role", "")) != "assistant":
-                return
+            role = str(getattr(item, "role", ""))
             text = str(getattr(item, "text_content", "")).strip()
+            if role in {"user", "assistant"} and text:
+                self._context_trace.add_history_message(
+                    provider_item_id=str(getattr(item, "id", "") or ""),
+                    role=role,
+                    content=text,
+                    interrupted=bool(getattr(item, "interrupted", False)),
+                )
+            if role != "assistant":
+                return
             if not text:
                 return
             self._close_user_transcript_group()
@@ -690,6 +712,10 @@ class LiveKitConversationSession:
                 raise RuntimeError("question preparation did not issue an answer turn")
             self._pending_generation = result.generation
             await self._publish_presentation(result)
+            self._context_trace.record_generation(
+                result.generation,
+                current_user_message=question,
+            )
             return result.generation.instructions
 
     async def _mark_playout_started(self) -> None:
@@ -781,6 +807,7 @@ class LiveKitConversationSession:
     def _execute_generation(self, directive: GenerationDirective) -> None:
         if self._agent_session is None:
             raise RuntimeError("agent session is not started")
+        self._context_trace.record_generation(directive)
         self._pending_generation = directive
         handle = self._agent_session.generate_reply(
             instructions=directive.instructions,

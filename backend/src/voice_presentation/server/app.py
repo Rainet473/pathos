@@ -189,6 +189,9 @@ def create_configured_app() -> FastAPI:
     from voice_presentation.transport.diagnostics import (
         JsonlConversationDiagnosticLedger,
     )
+    from voice_presentation.transport.context_trace import (
+        JsonlInferenceContextLedger,
+    )
     from voice_presentation.transport.usage import JsonlUsageLedger
 
     server_url = _required_environment("LIVEKIT_URL")
@@ -202,6 +205,11 @@ def create_configured_app() -> FastAPI:
     ).strip()
     if not diagnostics_log:
         raise RuntimeError("LIVE_DIAGNOSTICS_LOG must not be empty")
+    context_log = os.getenv(
+        "LLM_CONTEXT_LOG", ".runtime/llm-context.jsonl"
+    ).strip()
+    if not context_log:
+        raise RuntimeError("LLM_CONTEXT_LOG must not be empty")
     issuer = LiveKitTokenIssuer(api_key=api_key, api_secret=api_secret)
     usage_ledger = JsonlUsageLedger(usage_log)
     launcher = LiveKitProbeSessionLauncher(usage_ledger=usage_ledger)
@@ -230,6 +238,7 @@ def create_configured_app() -> FastAPI:
                 diagnostic_ledger=JsonlConversationDiagnosticLedger(
                     diagnostics_log
                 ),
+                context_ledger=JsonlInferenceContextLedger(context_log),
                 presentation_session_factory=_live_presentation_session,
             ),
             instructions=APPLICATION_PRESENTATION_INSTRUCTIONS,
