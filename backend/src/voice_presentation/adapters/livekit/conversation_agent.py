@@ -8,7 +8,7 @@ from typing import Any, Awaitable
 AgentConstructor = Callable[..., object]
 PresentationAgentConstructor = Callable[..., object]
 HttpContextFactory = Callable[[], contextlib.AbstractAsyncContextManager[object]]
-PrepareUserTurn = Callable[[str], Awaitable[str]]
+PrepareUserTurn = Callable[[str, str | None], Awaitable[str | None]]
 
 
 def default_agent_constructor(**kwargs: Any) -> object:
@@ -33,7 +33,15 @@ def default_presentation_agent_constructor(
             new_message: object,
         ) -> None:
             question = str(getattr(new_message, "text_content", "")).strip()
-            answer_instructions = await prepare_user_turn(question)
+            provider_item_id = str(getattr(new_message, "id", "") or "").strip()
+            answer_instructions = await prepare_user_turn(
+                question,
+                provider_item_id or None,
+            )
+            if answer_instructions is None:
+                from livekit.agents import llm
+
+                raise llm.StopResponse()
             turn_ctx.add_message(role="developer", content=answer_instructions)
 
     return ApplicationControlledPresentationAgent(

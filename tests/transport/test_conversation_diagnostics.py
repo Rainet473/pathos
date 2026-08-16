@@ -229,6 +229,69 @@ def test_pipeline_metrics_keep_endpoint_llm_tts_and_interruption_stages_distinct
     }
 
 
+def test_follow_up_planning_duration_is_separate_from_answer_streaming_metrics():
+    from voice_presentation.transport.diagnostics import ConversationDiagnostics
+
+    diagnostics = ConversationDiagnostics(
+        attempt_id="9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+        clock=SequenceClock(10.0, 10.1, 10.2),
+    )
+
+    planning = diagnostics.record_follow_up_planning(
+        duration_seconds=1.35,
+        provider_duration_seconds=1.1,
+        request_count=2,
+        tool_steps=2,
+        search_calls=1,
+        status="accepted",
+        input_tokens=1300,
+        cached_input_tokens=400,
+        total_tokens=1410,
+    )
+    answer_llm = diagnostics.record_metrics(
+        SimpleNamespace(
+            type="llm_metrics",
+            ttft=0.42,
+            duration=1.5,
+            cancelled=False,
+            prompt_tokens=80,
+            completion_tokens=18,
+            total_tokens=98,
+            prompt_cached_tokens=12,
+            tokens_per_second=36.0,
+        )
+    )
+    answer_tts = diagnostics.record_metrics(
+        SimpleNamespace(
+            type="tts_metrics",
+            ttfb=0.18,
+            duration=1.2,
+            audio_duration=2.4,
+            cancelled=False,
+            characters_count=72,
+            streamed=True,
+            acquire_time=0.04,
+            connection_reused=True,
+        )
+    )
+
+    assert planning.event_type == "follow_up_planning"
+    assert planning.fields == {
+        "planningDurationMs": 1350,
+        "planningProviderDurationMs": 1100,
+        "planningRequestCount": 2,
+        "planningToolSteps": 2,
+        "planningSearchCalls": 1,
+        "planningStatus": "accepted",
+        "planningInputTokens": 1300,
+        "planningCachedInputTokens": 400,
+        "planningTotalTokens": 1410,
+    }
+    assert "planningDurationMs" not in answer_llm.fields
+    assert answer_llm.fields["llmTtftMs"] == 420
+    assert answer_tts.fields["ttsTtfbMs"] == 180
+
+
 def test_jsonl_diagnostic_ledger_is_append_only_and_attempt_scoped(tmp_path):
     from voice_presentation.transport.diagnostics import (
         ConversationDiagnosticEvent,

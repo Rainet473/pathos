@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 
@@ -207,6 +208,56 @@ def test_launcher_reports_provider_failure_before_ready():
         with pytest.raises(ConversationSessionLaunchError, match="before becoming ready"):
             await launcher.launch(_spec())
 
+        await launcher.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_default_launcher_builds_follow_up_planner_from_the_session_deck(monkeypatch):
+    from voice_presentation.adapters.livekit import conversation as conversation_module
+    from voice_presentation.adapters.livekit.conversation_launcher import (
+        LiveKitConversationSessionLauncher,
+    )
+
+    async def scenario() -> None:
+        deck = object()
+        presentation = SimpleNamespace(deck=deck)
+        planner = object()
+        captured: dict[str, object] = {}
+
+        class CapturingConversation:
+            usage_outcome = "completed"
+
+            def __init__(self, session, voice_session_factory, **kwargs: object):
+                captured.update(
+                    session=session,
+                    voice_session_factory=voice_session_factory,
+                    **kwargs,
+                )
+
+            async def run(self, ready: asyncio.Event) -> None:
+                ready.set()
+
+        monkeypatch.setattr(
+            conversation_module,
+            "LiveKitConversationSession",
+            CapturingConversation,
+        )
+        launcher = LiveKitConversationSessionLauncher(
+            voice_session_factory=FakeVoiceSessionFactory(object()),
+            presentation_session_factory=lambda _attempt_id: presentation,
+            follow_up_planner_factory=lambda received_deck: (
+                planner if received_deck is deck else None
+            ),
+            ready_timeout_seconds=0.1,
+        )
+
+        await launcher.launch(_spec())
+        await asyncio.sleep(0)
+
+        assert captured["presentation_session"] is presentation
+        assert captured["follow_up_planner"] is planner
         await launcher.aclose()
 
     asyncio.run(scenario())

@@ -123,6 +123,9 @@ def create_configured_app() -> FastAPI:
     from voice_presentation.transport.context_trace import (
         JsonlInferenceContextLedger,
     )
+    from voice_presentation.adapters.livekit.silent_planner import (
+        JsonlSilentPlanningLedger,
+    )
     from voice_presentation.transport.usage import JsonlUsageLedger
 
     server_url = _required_environment("LIVEKIT_URL")
@@ -141,6 +144,12 @@ def create_configured_app() -> FastAPI:
     ).strip()
     if not context_log:
         raise RuntimeError("LLM_CONTEXT_LOG must not be empty")
+    silent_planner_log = os.getenv(
+        "SILENT_PLANNER_LOG",
+        ".runtime/livekit-silent-planning.jsonl",
+    ).strip()
+    if not silent_planner_log:
+        raise RuntimeError("SILENT_PLANNER_LOG must not be empty")
     issuer = LiveKitTokenIssuer(api_key=api_key, api_secret=api_secret)
     usage_ledger = JsonlUsageLedger(usage_log)
     selected_provider = _selected_voice_provider_name()
@@ -159,6 +168,12 @@ def create_configured_app() -> FastAPI:
             str(error)
         )
     else:
+        follow_up_planner_factory = _selected_follow_up_planner_factory(
+            selected_provider=selected_provider,
+            livekit_api_key=api_key,
+            livekit_api_secret=api_secret,
+            ledger=JsonlSilentPlanningLedger(silent_planner_log),
+        )
         conversation_service = ConversationBootstrapService(
             server_url=server_url,
             token_issuer=issuer,
@@ -170,10 +185,36 @@ def create_configured_app() -> FastAPI:
                 ),
                 context_ledger=JsonlInferenceContextLedger(context_log),
                 presentation_session_factory=_live_presentation_session,
+                follow_up_planner_factory=follow_up_planner_factory,
             ),
             instructions=APPLICATION_PRESENTATION_INSTRUCTIONS,
         )
     return create_app(conversation_service=conversation_service)
+
+
+def _selected_follow_up_planner_factory(
+    *,
+    selected_provider: str,
+    livekit_api_key: str,
+    livekit_api_secret: str,
+    ledger: object,
+):
+    if selected_provider != "livekit_inference_pipeline":
+        return None
+
+    def build(deck):
+        from voice_presentation.adapters.livekit.silent_planner import (
+            LiveKitSilentPlanner,
+        )
+
+        return LiveKitSilentPlanner.from_credentials(
+            deck=deck,
+            api_key=livekit_api_key,
+            api_secret=livekit_api_secret,
+            ledger=ledger,
+        )
+
+    return build
 
 
 def _live_presentation_session(session_id: str):

@@ -219,6 +219,12 @@ class PlanningStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class PlanningStage(StrEnum):
+    UNDERSTANDING = "understanding"
+    SEARCHING = "searching"
+    PREPARING = "preparing"
+
+
 class PlanningRejectionCode(StrEnum):
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"

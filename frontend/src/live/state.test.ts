@@ -21,6 +21,7 @@ describe("live conversation state", () => {
       endReason: null,
       needsAudioUnlock: false,
       timing: {
+        planningDurationMs: null,
         providerResponseStartGapMs: null,
         modelTtftMs: null,
         llmTtftMs: null,
@@ -89,6 +90,7 @@ describe("live conversation state", () => {
     });
 
     expect(state.timing).toEqual({
+      planningDurationMs: null,
       providerResponseStartGapMs: 1800,
       modelTtftMs: 950,
       llmTtftMs: 420,
@@ -250,6 +252,9 @@ function presentationUpdate(sessionVersion: number) {
       }],
       events: [],
       scopeMode: null,
+      groundingSource: null,
+      planningStage: null,
+      planningFailureCode: null,
       committedBeats: [],
     },
   };

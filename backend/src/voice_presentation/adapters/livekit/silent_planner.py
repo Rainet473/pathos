@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -29,6 +29,7 @@ from voice_presentation.domain.content import PresentationDeck
 from voice_presentation.domain.reasoning import (
     PlanningContext,
     PlanningRejectionCode,
+    PlanningStage,
     PlanningSnapshot,
     PlanningStatus,
     ReasoningModel,
@@ -263,6 +264,7 @@ class LiveKitSilentPlanner:
         snapshot: ReasoningContextSnapshot,
         context: PlanningContext,
         active_identity: Callable[[], tuple[int, str]] | None = None,
+        on_stage: Callable[[PlanningStage], Awaitable[None]] | None = None,
     ) -> SilentPlanningRun:
         session = FollowUpPlanningSession(
             deck=self._deck,
@@ -293,6 +295,8 @@ class LiveKitSilentPlanner:
         )
         try:
             async with asyncio.timeout(context.timeout_seconds):
+                if on_stage is not None:
+                    await on_stage(PlanningStage.UNDERSTANDING)
                 for sequence in range(1, MAX_PROVIDER_REQUESTS + 1):
                     search_available = (
                         session.snapshot.search_calls < MAX_SEARCH_CALLS
@@ -450,6 +454,8 @@ class LiveKitSilentPlanner:
                     trace.append(call_trace)
                     try:
                         if isinstance(parsed, SearchMaterialInput):
+                            if on_stage is not None:
+                                await on_stage(PlanningStage.SEARCHING)
                             result = session.search(
                                 parsed,
                                 session_version=context.session_version,
@@ -503,6 +509,8 @@ class LiveKitSilentPlanner:
                             )
                             continue
 
+                        if on_stage is not None:
+                            await on_stage(PlanningStage.PREPARING)
                         plan = session.submit(
                             parsed,
                             session_version=context.session_version,

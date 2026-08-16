@@ -5,7 +5,7 @@ but must remain visible during later breadth and release work.
 
 ## KI-001 — Answer-and-continue response asks for redundant permission
 
-- **Status:** deferred to prompt-quality hardening.
+- **Status:** prevented offline; live follow-up verification remains blocked.
 - **Observed:** 16 August 2026, attempt
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
 - **Behavior:** after the listener explicitly authorized continuation, the answer
@@ -19,6 +19,9 @@ but must remain visible during later breadth and release work.
 - **Later acceptance case:** an answer with `continue_after_answer` contains no
   permission-seeking or promise to wait; application-owned resumption still occurs
   only after verified answer playout.
+- **Offline mitigation:** the validated-plan answer directive now explicitly
+  forbids another permission request when continuation is already authorized, and
+  the LiveKit bridge proves resumption starts only after answer playout settles.
 
 ## KI-002 — Transcript discontinuity at interruption boundaries
 
@@ -87,7 +90,7 @@ but must remain visible during later breadth and release work.
 
 ## KI-006 — Referential follow-up questions can lose their antecedent
 
-- **Status:** deferred to conversational-retrieval hardening.
+- **Status:** mitigated offline; live follow-up verification remains blocked.
 - **Observed:** 16 August 2026, attempt
   `35a5be63-5af1-447d-871d-e76ce8cdc3b8`.
 - **Behavior:** short follow-ups such as “Can you explain me once again how this
@@ -106,3 +109,6 @@ but must remain visible during later breadth and release work.
   application input, prove the same question is classified consistently after
   interruption and manual navigation, and retain the current deterministic
   transition checks.
+- **Offline mitigation:** logical-turn provenance now retains actual interrupted
+  assistant text, the silent planner can cite that turn or bounded deck evidence,
+  and only a current application-validated plan can reach answer generation.

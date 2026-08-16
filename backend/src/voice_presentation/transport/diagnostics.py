@@ -184,6 +184,36 @@ class ConversationDiagnostics:
                 fields[wire_name] = _milliseconds(value)
         return self._record("turn_metrics", elapsed_ms, fields)
 
+    def record_follow_up_planning(
+        self,
+        *,
+        duration_seconds: float,
+        provider_duration_seconds: float,
+        request_count: int,
+        tool_steps: int,
+        search_calls: int,
+        status: str,
+        input_tokens: int,
+        cached_input_tokens: int,
+        total_tokens: int,
+    ) -> ConversationDiagnosticEvent:
+        """Record silent planning separately from answer LLM and TTS metrics."""
+
+        fields: dict[str, DiagnosticScalar] = {
+            "planningDurationMs": _milliseconds(duration_seconds),
+            "planningProviderDurationMs": _milliseconds(
+                provider_duration_seconds
+            ),
+            "planningRequestCount": max(0, request_count),
+            "planningToolSteps": max(0, tool_steps),
+            "planningSearchCalls": max(0, search_calls),
+            "planningStatus": status,
+            "planningInputTokens": max(0, input_tokens),
+            "planningCachedInputTokens": max(0, cached_input_tokens),
+            "planningTotalTokens": max(0, total_tokens),
+        }
+        return self._record("follow_up_planning", self._elapsed_ms(), fields)
+
     def _realtime_model_fields(
         self, metrics: object, *, elapsed_ms: int
     ) -> dict[str, DiagnosticScalar]:

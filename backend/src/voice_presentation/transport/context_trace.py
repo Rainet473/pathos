@@ -14,6 +14,8 @@ from voice_presentation.domain.provenance import (
     LogicalTurn,
     LogicalTurnLedger,
     TurnDeliveryStatus,
+    TurnPurpose,
+    TurnRole,
     format_turn_reference,
 )
 
@@ -339,6 +341,9 @@ class InferenceContextTrace:
         self._ledger = ledger or NullInferenceContextLedger()
         self._history: list[InferenceContextMessage] = []
         self._history_indexes: dict[str, int] = {}
+        self._logical_turns: dict[str, LogicalTurn] = {}
+        self._reasoning_trace: list[ReasoningTraceEntry] = []
+        self._provider_logical_turns: dict[str, str] = {}
         self._sequence = 0
 
     def add_history_message(
@@ -348,6 +353,7 @@ class InferenceContextTrace:
         role: Literal["user", "assistant"],
         content: str,
         interrupted: bool = False,
+        logical_turn_id: str | None = None,
     ) -> None:
         content = content.strip()
         if not content:
@@ -358,13 +364,82 @@ class InferenceContextTrace:
             content=content,
             provider_item_id=normalized_id,
             interrupted=interrupted,
+            logical_turn_id=logical_turn_id,
         )
         if normalized_id is not None and normalized_id in self._history_indexes:
             self._history[self._history_indexes[normalized_id]] = message
+            if role == "assistant" and logical_turn_id is not None:
+                self._record_assistant_turn(
+                    turn_id=logical_turn_id,
+                    provider_item_id=normalized_id,
+                    content=content,
+                    interrupted=interrupted,
+                )
             return
         if normalized_id is not None:
             self._history_indexes[normalized_id] = len(self._history)
         self._history.append(message)
+        if role == "assistant" and logical_turn_id is not None:
+            self._record_assistant_turn(
+                turn_id=logical_turn_id,
+                provider_item_id=normalized_id,
+                content=content,
+                interrupted=interrupted,
+            )
+
+    def logical_turn_id_for_provider(self, provider_item_id: str) -> str | None:
+        return self._provider_logical_turns.get(provider_item_id.strip())
+
+    def register_follow_up(self, turn: LogicalTurn) -> None:
+        if (
+            turn.role is not TurnRole.USER
+            or turn.purpose is not TurnPurpose.USER_FOLLOW_UP
+            or turn.delivery_status is not TurnDeliveryStatus.COMPLETED
+        ):
+            raise ValueError("reasoning context requires a completed user follow-up")
+        self._register_logical_turn(turn.model_copy(update={"session_version": 0}))
+        self._reasoning_trace.append(TurnMessageTrace(turn_id=turn.turn_id))
+        for provider_item_id in turn.provider_item_ids:
+            self._provider_logical_turns[provider_item_id] = turn.turn_id
+
+    def record_planning_trace(
+        self,
+        entries: tuple[ReasoningTraceEntry, ...],
+    ) -> None:
+        self._reasoning_trace.extend(entries)
+
+    def reasoning_snapshot(self, *, session_version: int) -> ReasoningContextSnapshot:
+        delivered_turn_ids = {
+            entry.turn_id
+            for entry in self._reasoning_trace
+            if isinstance(entry, TurnMessageTrace)
+        }
+        turns = tuple(
+            turn.model_copy(
+                update={
+                    "session_version": session_version,
+                    "interrupted_turn_id": (
+                        turn.interrupted_turn_id
+                        if turn.interrupted_turn_id in delivered_turn_ids
+                        else None
+                    ),
+                    "resumed_after_turn_id": (
+                        turn.resumed_after_turn_id
+                        if turn.resumed_after_turn_id in delivered_turn_ids
+                        else None
+                    ),
+                }
+            )
+            for turn_id, turn in self._logical_turns.items()
+            if turn_id in delivered_turn_ids
+        )
+        return ReasoningContextSnapshot(
+            session_id=self._attempt_id,
+            session_version=session_version,
+            stable_instructions=self._stable_instructions,
+            turns=turns,
+            trace=tuple(self._reasoning_trace),
+        )
 
     def record_generation(
         self,
@@ -372,6 +447,7 @@ class InferenceContextTrace:
         *,
         current_user_message: str | None = None,
     ) -> InferenceContextRecord:
+        self._register_generation(directive)
         messages = list(self._history)
         if directive.purpose is PlayoutPurpose.NARRATION:
             messages.append(
@@ -405,3 +481,75 @@ class InferenceContextTrace:
         )
         self._ledger.record(record)
         return record
+
+    def _register_generation(self, directive: GenerationDirective) -> None:
+        purpose = (
+            TurnPurpose.NARRATION
+            if directive.purpose is PlayoutPurpose.NARRATION
+            else TurnPurpose.ANSWER
+        )
+        turn = LogicalTurn(
+            turn_id=directive.turn_id,
+            role=TurnRole.ASSISTANT,
+            purpose=purpose,
+            session_version=0,
+            slide_id=directive.cursor.slide_id,
+            beat_index=(
+                directive.cursor.beat_index
+                if directive.purpose is PlayoutPurpose.NARRATION
+                else None
+            ),
+            delivery_status=TurnDeliveryStatus.PENDING,
+            plan_id=directive.plan_id,
+            scope_mode=directive.scope_mode,
+            grounding_source=directive.grounding_source,
+        )
+        self._register_logical_turn(turn)
+
+    def _record_assistant_turn(
+        self,
+        *,
+        turn_id: str,
+        provider_item_id: str | None,
+        content: str,
+        interrupted: bool,
+    ) -> None:
+        turn = self._logical_turns.get(turn_id)
+        if turn is None:
+            raise ValueError(f"unknown logical assistant turn: {turn_id}")
+        provider_item_ids = turn.provider_item_ids
+        if provider_item_id is not None:
+            provider_item_ids = tuple(
+                dict.fromkeys((*provider_item_ids, provider_item_id))
+            )
+            owner = self._provider_logical_turns.get(provider_item_id)
+            if owner is not None and owner != turn_id:
+                raise ValueError(
+                    f"provider item {provider_item_id} already belongs to {owner}"
+                )
+            self._provider_logical_turns[provider_item_id] = turn_id
+        delivered = turn.model_copy(
+            update={
+                "provider_item_ids": provider_item_ids,
+                "actual_text": content,
+                "delivery_status": (
+                    TurnDeliveryStatus.INTERRUPTED
+                    if interrupted
+                    else TurnDeliveryStatus.COMPLETED
+                ),
+            }
+        )
+        self._logical_turns[turn_id] = delivered
+        if not any(
+            isinstance(entry, TurnMessageTrace) and entry.turn_id == turn_id
+            for entry in self._reasoning_trace
+        ):
+            self._reasoning_trace.append(TurnMessageTrace(turn_id=turn_id))
+
+    def _register_logical_turn(self, turn: LogicalTurn) -> None:
+        existing = self._logical_turns.get(turn.turn_id)
+        if existing is not None:
+            if existing == turn:
+                return
+            raise ValueError(f"conflicting logical turn: {turn.turn_id}")
+        self._logical_turns[turn.turn_id] = turn

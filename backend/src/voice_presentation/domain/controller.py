@@ -291,6 +291,32 @@ class PresentationController:
         self._advance_version()
         return tuple(events)
 
+    def follow_up_planning_failed(
+        self,
+        *,
+        reason_code: str,
+    ) -> tuple[DomainEvent, ...]:
+        reason_code = reason_code.strip()
+        if not reason_code:
+            raise TransitionRejected("planning failure reason cannot be blank")
+        self._require_phase(
+            "follow_up_planning_failed",
+            PresentationPhase.INTERRUPTED,
+            PresentationPhase.WAITING,
+            PresentationPhase.COMPLETED,
+        )
+        events = [
+            DomainEvent(
+                type=DomainEventType.FOLLOW_UP_PLANNING_FAILED,
+                reason_code=reason_code,
+            )
+        ]
+        if self.state.phase is PresentationPhase.INTERRUPTED:
+            self.state.phase = PresentationPhase.WAITING
+            events.append(DomainEvent(type=DomainEventType.PRESENTATION_WAITING))
+        self._advance_version()
+        return tuple(events)
+
     def continue_presentation(self, *, turn_id: str) -> tuple[DomainEvent, ...]:
         turn_id = self._turn_id(turn_id)
         self._require_phase("continue_presentation", PresentationPhase.WAITING)

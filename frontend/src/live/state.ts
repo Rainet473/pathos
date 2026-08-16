@@ -35,6 +35,7 @@ export interface LiveState {
 }
 
 export interface LiveTimingSummary {
+  planningDurationMs: number | null;
   providerResponseStartGapMs: number | null;
   modelTtftMs: number | null;
   llmTtftMs: number | null;
@@ -168,6 +169,7 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
 
 function emptyTiming(): LiveTimingSummary {
   return {
+    planningDurationMs: null,
     providerResponseStartGapMs: null,
     modelTtftMs: null,
     llmTtftMs: null,
