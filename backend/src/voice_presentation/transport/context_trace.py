@@ -3,13 +3,19 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from pydantic.alias_generators import to_camel
 
 from voice_presentation.application.live_presentation import GenerationDirective
 from voice_presentation.domain.contracts import PlayoutPurpose
+from voice_presentation.domain.provenance import (
+    LogicalTurn,
+    LogicalTurnLedger,
+    TurnDeliveryStatus,
+    format_turn_reference,
+)
 
 
 ContextRole = Literal["system", "developer", "user", "assistant"]
@@ -23,10 +29,248 @@ class InferenceContextMessage(BaseModel):
         frozen=True,
     )
 
+    type: Literal["message"] = "message"
     role: ContextRole
     content: str = Field(min_length=1)
     provider_item_id: str | None = None
     interrupted: bool = False
+    logical_turn_id: str | None = Field(default=None, min_length=1)
+
+
+class TurnMessageTrace(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        frozen=True,
+    )
+
+    type: Literal["turn_message"] = "turn_message"
+    turn_id: str = Field(min_length=1)
+
+
+class FunctionCallTrace(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        frozen=True,
+    )
+
+    type: Literal["function_call"] = "function_call"
+    call_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    arguments: dict[str, JsonValue]
+
+    def arguments_json(self) -> str:
+        return json.dumps(
+            self.arguments,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
+class FunctionResultTrace(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        frozen=True,
+    )
+
+    type: Literal["function_result"] = "function_result"
+    call_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    output: JsonValue
+    is_error: bool
+
+    def output_json(self) -> str:
+        return json.dumps(
+            self.output,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
+class ApplicationDecisionTrace(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        frozen=True,
+    )
+
+    type: Literal["application_decision"] = "application_decision"
+    decision_id: str = Field(min_length=1)
+    source_call_id: str = Field(min_length=1)
+    plan_id: str = Field(min_length=1)
+    accepted: bool
+    reason_code: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    supporting_turn_ids: tuple[str, ...] = ()
+
+
+ReasoningTraceEntry = Annotated[
+    TurnMessageTrace
+    | FunctionCallTrace
+    | FunctionResultTrace
+    | ApplicationDecisionTrace,
+    Field(discriminator="type"),
+]
+ModelContextItem = InferenceContextMessage | FunctionCallTrace | FunctionResultTrace
+
+
+class ReasoningContextSnapshot(BaseModel):
+    """Deterministic audit fixture for provenance-aware model context."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        frozen=True,
+    )
+
+    schema_version: Literal[1] = 1
+    session_id: str = Field(min_length=1)
+    session_version: int = Field(ge=0)
+    stable_instructions: str = Field(min_length=1)
+    turns: tuple[LogicalTurn, ...]
+    trace: tuple[ReasoningTraceEntry, ...]
+    fidelity: Literal["application_provider_neutral_context"] = (
+        "application_provider_neutral_context"
+    )
+
+    @property
+    def ledger(self) -> LogicalTurnLedger:
+        ledger = LogicalTurnLedger(session_version=self.session_version)
+        for turn in self.turns:
+            ledger.register(turn)
+        return ledger
+
+    @model_validator(mode="after")
+    def validate_chronology(self) -> "ReasoningContextSnapshot":
+        ledger = self.ledger
+        for turn in self.turns:
+            if turn.interrupted_turn_id is not None:
+                ledger.resolve(turn.interrupted_turn_id)
+            if turn.resumed_after_turn_id is not None:
+                ledger.resolve(turn.resumed_after_turn_id)
+
+        seen_turns: set[str] = set()
+        seen_calls: dict[str, str] = {}
+        seen_results: set[str] = set()
+        for entry in self.trace:
+            if isinstance(entry, TurnMessageTrace):
+                turn = ledger.resolve(entry.turn_id)
+                if turn.delivery_status is TurnDeliveryStatus.PENDING:
+                    raise ValueError(
+                        f"turn {entry.turn_id} has no actual retained text"
+                    )
+                if entry.turn_id in seen_turns:
+                    raise ValueError(f"duplicate turn message: {entry.turn_id}")
+                seen_turns.add(entry.turn_id)
+            elif isinstance(entry, FunctionCallTrace):
+                if entry.call_id in seen_calls:
+                    raise ValueError(f"duplicate function call: {entry.call_id}")
+                seen_calls[entry.call_id] = entry.name
+            elif isinstance(entry, FunctionResultTrace):
+                call_name = seen_calls.get(entry.call_id)
+                if call_name is None:
+                    raise ValueError(
+                        f"function result {entry.call_id} appears before its function call"
+                    )
+                if call_name != entry.name:
+                    raise ValueError(
+                        f"function result {entry.call_id} does not match call name"
+                    )
+                if entry.call_id in seen_results:
+                    raise ValueError(f"duplicate function result: {entry.call_id}")
+                seen_results.add(entry.call_id)
+            else:
+                call_name = seen_calls.get(entry.source_call_id)
+                if call_name is None:
+                    raise ValueError(
+                        f"application decision {entry.decision_id} has no source call"
+                    )
+                if entry.source_call_id not in seen_results:
+                    raise ValueError(
+                        f"application decision {entry.decision_id} appears before its function result"
+                    )
+                ledger.require_turn_ids(entry.supporting_turn_ids)
+                source_call = next(
+                    call
+                    for call in self.trace
+                    if isinstance(call, FunctionCallTrace)
+                    and call.call_id == entry.source_call_id
+                )
+                cited_turn_ids = source_call.arguments.get("supportingTurnIds")
+                if cited_turn_ids is None:
+                    cited_turn_ids = source_call.arguments.get("supporting_turn_ids")
+                if cited_turn_ids is not None:
+                    if not isinstance(cited_turn_ids, list) or not all(
+                        isinstance(turn_id, str) for turn_id in cited_turn_ids
+                    ):
+                        raise ValueError(
+                            f"function call {entry.source_call_id} has invalid turn citations"
+                        )
+                    if tuple(cited_turn_ids) != entry.supporting_turn_ids:
+                        raise ValueError(
+                            f"application decision {entry.decision_id} does not match source citations"
+                        )
+
+        registered_turns = {turn.turn_id for turn in self.turns}
+        missing_turns = registered_turns - seen_turns
+        if missing_turns:
+            missing = ", ".join(sorted(missing_turns))
+            raise ValueError(f"logical turns missing from trace: {missing}")
+        return self
+
+    def model_context_items(self) -> tuple[ModelContextItem, ...]:
+        ledger = self.ledger
+        items: list[ModelContextItem] = [
+            InferenceContextMessage(
+                role="system",
+                content=self.stable_instructions,
+            )
+        ]
+        for entry in self.trace:
+            if isinstance(entry, TurnMessageTrace):
+                turn = ledger.resolve(entry.turn_id)
+                if turn.actual_text is None:
+                    raise ValueError(
+                        f"turn {turn.turn_id} has no actual retained text"
+                    )
+                items.extend(
+                    (
+                        InferenceContextMessage(
+                            role="developer",
+                            content=format_turn_reference(turn),
+                        ),
+                        InferenceContextMessage(
+                            role=turn.role.value,
+                            content=turn.actual_text,
+                            provider_item_id=(
+                                turn.provider_item_ids[0]
+                                if turn.provider_item_ids
+                                else None
+                            ),
+                            interrupted=(
+                                turn.delivery_status
+                                is TurnDeliveryStatus.INTERRUPTED
+                            ),
+                            logical_turn_id=turn.turn_id,
+                        ),
+                    )
+                )
+            elif isinstance(entry, (FunctionCallTrace, FunctionResultTrace)):
+                items.append(entry)
+        return tuple(items)
+
+    def to_json(self) -> str:
+        return json.dumps(
+            self.model_dump(mode="json", by_alias=True),
+            separators=(",", ":"),
+            sort_keys=True,
+        )
 
 
 class InferenceContextRecord(BaseModel):
