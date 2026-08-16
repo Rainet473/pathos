@@ -44,6 +44,9 @@ adjacent finalized STT fragments
 - The planning deadline bounds provider waiting. Once a complete provider
   response has arrived within that deadline, local parsing and validation are
   allowed to settle it without asynchronous cancellation.
+- The default planning deadline is 30 seconds total across all provider requests,
+  searches, and bounded recovery steps in one follow-up. It is not renewed per
+  request, and the schema-level maximum remains 60 seconds.
 - Planning failure remains visible while waiting, then clears when a new
   follow-up is accepted or narration recovery starts.
 - Adjacent fragments are merged only before any assistant response begins and
@@ -58,6 +61,7 @@ adjacent finalized STT fragments
 | Situation | Expected observation | Oracle |
 |---|---|---|
 | Current ABS search reaches the deadline edge | A complete terminal tool response is locally validated and accepted | Offline adapter test |
+| A follow-up uses the application default | Its planning context exposes one shared 30-second deadline | Application test |
 | Plan cites an ABS evidence ID from a prior turn | The rejection is returned to the planner; a bounded current search and corrected plan can succeed | Offline adapter test |
 | Continue after a failed plan | Narration starts and the stale red planning failure is cleared | Application and frontend tests |
 | “Explain AWS. Then” followed immediately by “continue narration.” | One logical follow-up retains the full explicit answer-and-continue intent | Adapter/application test |

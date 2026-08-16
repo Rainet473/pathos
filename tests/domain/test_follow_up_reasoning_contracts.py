@@ -3,15 +3,38 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from voice_presentation.domain.contracts import ScopeMode
+from voice_presentation.domain.contracts import ContinuationPreference, ScopeMode
 from voice_presentation.domain.provenance import GroundingSource
 from voice_presentation.domain.reasoning import (
+    PlanningContext,
     SearchMaterialInput,
     SubmitAnswerPlanInput,
 )
 
 
 pytestmark = pytest.mark.offline
+
+
+def test_planning_context_defaults_to_one_thirty_second_deadline():
+    context = PlanningContext(
+        follow_up_turn_id="user-follow-up-1",
+        session_version=3,
+        current_slide_id="clutch-and-gears",
+        visible_slide_id="clutch-and-gears",
+        continuation_preference=ContinuationPreference.STAY_PAUSED,
+    )
+
+    assert context.timeout_seconds == 30.0
+
+    with pytest.raises(ValidationError):
+        PlanningContext(
+            follow_up_turn_id="user-follow-up-1",
+            session_version=3,
+            current_slide_id="clutch-and-gears",
+            visible_slide_id="clutch-and-gears",
+            continuation_preference=ContinuationPreference.STAY_PAUSED,
+            timeout_seconds=60.1,
+        )
 
 
 @pytest.mark.parametrize(

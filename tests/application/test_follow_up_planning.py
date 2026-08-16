@@ -420,7 +420,9 @@ def test_cancellation_after_search_blocks_terminal_plan_and_is_idempotent():
 
 def test_timeout_before_and_during_search_is_controlled():
     now = [100.0]
-    context = _case("material-search").context
+    context = _case("material-search").context.model_copy(
+        update={"timeout_seconds": 10.0}
+    )
     before = FollowUpPlanningSession(
         deck=_deck(),
         provenance=_context_snapshot().ledger,

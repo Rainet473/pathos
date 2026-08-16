@@ -188,7 +188,7 @@ class PlanningContext(ReasoningModel):
     visible_slide_id: NonBlankString
     continuation_preference: ContinuationPreference
     current_slide_evidence: tuple[MaterialHit, ...] = Field(default=(), max_length=5)
-    timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=60)
 
     @model_validator(mode="after")
     def validate_current_evidence(self) -> "PlanningContext":

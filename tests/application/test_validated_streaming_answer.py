@@ -106,6 +106,7 @@ def test_follow_up_planning_is_visible_and_does_not_begin_an_answer_turn():
     assert request.context.continuation_preference is (
         ContinuationPreference.CONTINUE_AFTER_ANSWER
     )
+    assert request.context.timeout_seconds == 30.0
     assert request.follow_up_turn.interrupted_turn_id == narration_turn_id
     assert request.follow_up_turn.actual_text == (
         "What response did you mean? Continue after answering."

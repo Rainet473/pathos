@@ -271,7 +271,7 @@ class ApplicationPresentationSession:
         question: str,
         *,
         provider_item_id: str | None = None,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float = 30.0,
     ) -> FollowUpPlanningAction:
         question = question.strip()
         if not question:

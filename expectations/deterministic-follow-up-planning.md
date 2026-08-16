@@ -104,9 +104,9 @@ plain follow-up + logical-turn ledger + active deck/session snapshot
 
 ## Open assumptions
 
-- A default 10-second offline planning deadline is a safety bound, not a measured
-  live latency target; the real Gemma planner slice must measure and revise it if
-  necessary.
+- The default 30-second planning deadline is one shared safety bound across the
+  full provider/search/recovery loop, not a per-request allowance. The schema
+  continues to reject values above 60 seconds.
 - Keyword/phrase retrieval over authored beats and deep dives is expected to be
   sufficient for six slides; embedding retrieval remains evidence-gated.
 - `related_terms` may improve slide relevance but do not alone prove a grounded

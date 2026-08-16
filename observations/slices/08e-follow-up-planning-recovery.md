@@ -36,6 +36,7 @@ spoken follow-up -> bounded turn stabilization -> silent planner
 |---|---|---|
 | Planner contract | Recorded provider/tool tests | Historical evidence is rejected visibly and can be corrected within bounds |
 | Deadline settlement | Controlled async stream test | A response received before the deadline completes local validation |
+| Deadline configuration | Application default test | One follow-up receives a shared 30-second planning deadline |
 | Application recovery | State-transition tests | Starting recovery clears stale failure without altering the cursor |
 | Turn stabilization | Adjacent-fragment adapter test | One complete follow-up and continuation preference reach planning |
 | Regression | Backend, frontend, and build gates | All retained offline suites remain green |
@@ -60,6 +61,10 @@ spoken follow-up -> bounded turn stabilization -> silent planner
   recognition, and the absent fragment-coalescing hook.
 - Frontend red baseline: the focused status test failed because every non-timeout
   reason still used the same generic message.
+- Timeout-tuning red baseline: the application-default assertion observed the
+  previous `10.0`-second value. The first retained backend run then exposed one
+  timeout-control fixture that implicitly depended on that old default; its
+  scenario now requests 10 seconds explicitly.
 - Targeted implementation gate: 31 planner, application, and LiveKit bridge tests
   passed, including deadline-edge local settlement, historical-evidence
   correction, stale-error clearing, incomplete-fragment coalescing, and explicit
@@ -68,6 +73,10 @@ spoken follow-up -> bounded turn stabilization -> silent planner
   skipped. `pip check` reported no broken requirements.
 - Retained frontend gate: 36 tests passed. TypeScript checking and the Vite
   production build completed; the pre-existing large-chunk warning remains.
+- Thirty-second deadline gate: the application and domain contract checks pass;
+  the retained backend suite reports 261 passed and two opt-in live tests skipped.
+  The frontend still reports 36 tests passed, the production build completes,
+  and `pip check` reports no broken requirements.
 - No post-fix provider or acoustic run was spent automatically. The live ABS and
   AWS answer-and-continue cases remain the exit evidence needed before starting
   answer-focus navigation.
