@@ -24,6 +24,7 @@ class FakeActionType(StrEnum):
     INTERRUPT_AND_ASK = "interrupt_and_ask"
     COMPLETE_PLAYOUT = "complete_playout"
     CONTINUE = "continue"
+    NAVIGATE = "navigate"
 
 
 class FakeActionRequest(BaseModel):
@@ -36,6 +37,7 @@ class FakeActionRequest(BaseModel):
     type: FakeActionType
     question: str | None = None
     continuation_preference: ContinuationPreference | None = None
+    slide_id: str | None = None
 
     @model_validator(mode="after")
     def question_fields_match_action(self) -> "FakeActionRequest":
@@ -44,7 +46,18 @@ class FakeActionRequest(BaseModel):
                 raise ValueError("interrupt_and_ask requires a non-blank question")
             if self.continuation_preference is None:
                 raise ValueError("interrupt_and_ask requires continuationPreference")
-        elif self.question is not None or self.continuation_preference is not None:
+            if self.slide_id is not None:
+                raise ValueError("slideId is only valid for navigate")
+        elif self.type is FakeActionType.NAVIGATE:
+            if self.slide_id is None or not self.slide_id.strip():
+                raise ValueError("navigate requires a non-blank slideId")
+            if self.question is not None or self.continuation_preference is not None:
+                raise ValueError("question fields are only valid for interrupt_and_ask")
+        elif (
+            self.question is not None
+            or self.continuation_preference is not None
+            or self.slide_id is not None
+        ):
             raise ValueError("question fields are only valid for interrupt_and_ask")
         return self
 
@@ -77,6 +90,9 @@ class FakeSessionStore:
                 return session.complete_active_playout()
             if action.type is FakeActionType.CONTINUE:
                 return session.continue_presentation()
+            if action.type is FakeActionType.NAVIGATE:
+                assert action.slide_id is not None
+                return session.navigate_to_slide(action.slide_id)
             assert action.question is not None
             assert action.continuation_preference is not None
             return session.interrupt_and_answer(

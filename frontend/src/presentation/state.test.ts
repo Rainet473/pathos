@@ -10,6 +10,7 @@ import {
 function snapshot(sessionVersion: number, sessionId = "session-1"): FakeSessionSnapshot {
   return {
     sessionId,
+    deckId: "slice-two",
     state: {
       sessionVersion,
       phase: "presenting",

@@ -12,7 +12,7 @@ from voice_presentation.domain.policy import QuestionScopePolicy
 pytestmark = pytest.mark.offline
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SIX_SLIDE_DECK = REPOSITORY_ROOT / "content" / "motorcycle-controls.json"
+SIX_SLIDE_DECK = REPOSITORY_ROOT / "assets" / "motorcycle-controls" / "slide-breakdown.json"
 
 
 def _policy() -> QuestionScopePolicy:
@@ -89,3 +89,39 @@ def test_unsafe_or_unrelated_full_deck_question_stays_out_of_scope(question):
     assert decision.scope_mode is ScopeMode.OUT_OF_SCOPE
     assert decision.supporting_slide_id is None
     assert decision.evidence == ()
+
+
+def test_visible_slide_is_a_tie_breaker_not_a_hard_question_filter(deck_payload):
+    for slide in deck_payload["slides"]:
+        slide["deep_dive"] = [
+            {
+                "concept": "shared coupling concept",
+                "explanation": "A shared coupling explanation connects input and output.",
+                "caveats": [],
+            }
+        ]
+        slide["related_terms"] = []
+    from voice_presentation.domain.content import PresentationDeck
+
+    policy = QuestionScopePolicy(PresentationDeck.model_validate(deck_payload))
+
+    preferred = policy.classify(
+        "How does the shared coupling connect input and output?",
+        preferred_slide_id="braking-abs",
+    )
+    fallback = _policy().classify(
+        "Why does engine braking feel stronger in a low gear?",
+        preferred_slide_id="braking-abs",
+    )
+
+    assert preferred.scope_mode is ScopeMode.GROUNDED
+    assert preferred.supporting_slide_id == "braking-abs"
+    assert fallback.supporting_slide_id == "engine-braking"
+
+
+def test_question_policy_rejects_an_unknown_preferred_slide():
+    with pytest.raises(ValueError, match="unknown slide id"):
+        _policy().classify(
+            "Why does a motorcycle need a clutch?",
+            preferred_slide_id="missing-slide",
+        )

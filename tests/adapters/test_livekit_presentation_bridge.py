@@ -58,6 +58,11 @@ class FakeSpeechHandle:
     def done(self) -> bool:
         return self._done
 
+    def interrupt(self, *, force: bool = False):
+        del force
+        self.finish(interrupted=True)
+        return self
+
     def finish(self, *, interrupted: bool = False) -> None:
         self.interrupted = interrupted
         self._done = True
@@ -284,6 +289,75 @@ def test_default_presentation_agent_injects_application_evidence_for_the_turn():
 
         assert turn_context.messages()[-1].role == "developer"
         assert turn_context.messages()[-1].text_content == "Use only selected evidence."
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_browser_navigation_interrupts_narration_and_preserves_semantic_cursor():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        deck = JsonMaterialRepository(
+            REPOSITORY_ROOT
+            / "assets"
+            / "motorcycle-controls"
+            / "slide-breakdown.json"
+        ).load()
+        presentation = ApplicationPresentationSession(
+            deck, session_id=_spec().attempt_id
+        )
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=presentation,
+            presentation_agent_constructor=RecordingPresentationAgentConstructor(),
+            http_context_factory=NullAsyncContext,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=2,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = type("Participant", (), {"identity": _spec().browser_identity})()
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        original_cursor = _updates(room)[-1].view.state.presentation_cursor
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+
+        room.handlers["data_received"](
+            type(
+                "Packet",
+                (),
+                {
+                    "data": b'{"action":"navigate","slideId":"braking-abs"}',
+                    "topic": PRESENTATION_COMMAND_TOPIC,
+                    "participant": browser,
+                },
+            )()
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        update = _updates(room)[-1]
+        assert narration_handle.interrupted is True
+        assert update.view.state.phase is PresentationPhase.WAITING
+        assert update.view.state.presentation_cursor == original_cursor
+        assert update.view.state.interrupted_cursor == original_cursor
+        assert update.view.state.visible_slide_id == "braking-abs"
+        assert update.view.committed_beats == ()
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
 
     asyncio.run(scenario())
 

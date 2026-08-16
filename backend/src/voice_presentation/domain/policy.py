@@ -68,10 +68,16 @@ class QuestionScopePolicy:
     def __init__(self, deck: PresentationDeck) -> None:
         self._deck = deck
 
-    def classify(self, question: str) -> QuestionDecision:
+    def classify(
+        self,
+        question: str,
+        *,
+        preferred_slide_id: str | None = None,
+    ) -> QuestionDecision:
         question = question.strip()
         if not question:
             raise ValueError("question cannot be blank")
+        slides = self._ordered_slides(preferred_slide_id)
 
         normalized = " ".join(_WORD.findall(question.lower()))
         ambiguous_phrases = (
@@ -88,7 +94,7 @@ class QuestionScopePolicy:
         if self._is_unsafe_specific_or_unrelated(normalized):
             return QuestionDecision(scope_mode=ScopeMode.OUT_OF_SCOPE)
 
-        for slide in self._deck.slides:
+        for slide in slides:
             if any(term.lower() in normalized for term in slide.related_terms):
                 return QuestionDecision(
                     scope_mode=ScopeMode.EXTENDED_KNOWLEDGE,
@@ -101,7 +107,7 @@ class QuestionScopePolicy:
         best_evidence: tuple[str, ...] = ()
         best_score = 0
         best_overlap = 0
-        for slide in self._deck.slides:
+        for slide in slides:
             for deep_dive in slide.deep_dive:
                 concept_terms = self._terms(deep_dive.concept)
                 detail_terms = self._terms(
@@ -125,6 +131,14 @@ class QuestionScopePolicy:
             )
 
         return QuestionDecision(scope_mode=ScopeMode.OUT_OF_SCOPE)
+
+    def _ordered_slides(self, preferred_slide_id: str | None):
+        if preferred_slide_id is None:
+            return self._deck.slides
+        preferred = self._deck.slide(preferred_slide_id)
+        return (preferred,) + tuple(
+            slide for slide in self._deck.slides if slide.id != preferred_slide_id
+        )
 
     @staticmethod
     def _terms(text: str) -> set[str]:

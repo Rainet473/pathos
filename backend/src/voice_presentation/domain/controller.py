@@ -312,6 +312,40 @@ class PresentationController:
         self._advance_version()
         return tuple(events)
 
+    def navigate_to_slide(self, *, slide_id: str) -> tuple[DomainEvent, ...]:
+        slide_id = slide_id.strip()
+        if not slide_id:
+            raise TransitionRejected("slide_id cannot be blank")
+        try:
+            self._deck.slide(slide_id)
+        except ValueError as error:
+            raise TransitionRejected(str(error)) from error
+
+        self._require_phase(
+            "navigate_to_slide",
+            PresentationPhase.READY,
+            PresentationPhase.INTERRUPTED,
+            PresentationPhase.WAITING,
+            PresentationPhase.COMPLETED,
+        )
+        events: list[DomainEvent] = []
+        if slide_id != self.state.visible_slide_id:
+            self.state.visible_slide_id = slide_id
+            events.append(
+                DomainEvent(
+                    type=DomainEventType.SLIDE_CHANGED,
+                    slide_id=slide_id,
+                    slide_change_reason=SlideChangeReason.USER,
+                )
+            )
+        if self.state.phase is PresentationPhase.INTERRUPTED:
+            self.state.phase = PresentationPhase.WAITING
+            events.append(DomainEvent(type=DomainEventType.PRESENTATION_WAITING))
+        if not events:
+            return ()
+        self._advance_version()
+        return tuple(events)
+
     def _restore_slide_events(self, cursor: Cursor) -> list[DomainEvent]:
         if self.state.visible_slide_id == cursor.slide_id:
             return []

@@ -59,7 +59,8 @@ validated six-slide JSON -> application narration directive -> voice playout fac
   red regression test reproduced it before the selection guard was corrected.
 - Both `ApplicationPresentationSession` and `FakePresentationSession` now traverse
   all 24 beats using application-issued turn IDs and verified playout completion.
-- The configured live runtime loads `content/motorcycle-controls.json`; the earlier
+- The configured live runtime loads
+  `assets/motorcycle-controls/slide-breakdown.json`; the earlier
   one-slide deterministic route continues to load `content/slice-two.json`.
 - Focused result: 6 tests passed.
 - Full Python result: 160 passed; the opt-in paid LiveKit test skipped.

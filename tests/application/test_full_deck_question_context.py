@@ -15,7 +15,7 @@ from voice_presentation.domain.events import DomainEventType, SlideChangeReason
 pytestmark = pytest.mark.offline
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SIX_SLIDE_DECK = REPOSITORY_ROOT / "content" / "motorcycle-controls.json"
+SIX_SLIDE_DECK = REPOSITORY_ROOT / "assets" / "motorcycle-controls" / "slide-breakdown.json"
 
 
 def test_full_deck_question_slide_is_temporary_and_cursor_restores_before_resume():
@@ -55,3 +55,26 @@ def test_full_deck_question_slide_is_temporary_and_cursor_restores_before_resume
         and event.slide_change_reason is SlideChangeReason.RESTORE
         for event in resumed.view.events
     )
+
+
+def test_manual_browse_sets_question_preference_but_full_deck_search_can_override_it():
+    deck = JsonMaterialRepository(SIX_SLIDE_DECK).load()
+    session = ApplicationPresentationSession(deck, session_id="manual-context")
+    narration = session.start().generation
+    assert narration is not None
+    original_cursor = narration.cursor
+    session.playout_started(turn_id=narration.turn_id)
+    session.playout_finished(turn_id=narration.turn_id, interrupted=True)
+
+    browsed = session.navigate_to_slide("braking-abs")
+    assert browsed.view.state.phase is PresentationPhase.WAITING
+    assert browsed.view.state.presentation_cursor == original_cursor
+    assert browsed.view.state.visible_slide_id == "braking-abs"
+
+    answer = session.prepare_question("Why does a motorcycle need a clutch?")
+
+    assert answer.view.scope_mode.value == "grounded"
+    assert answer.view.state.presentation_cursor == original_cursor
+    assert answer.view.state.visible_slide_id == "clutch-and-gears"
+    assert answer.generation is not None
+    assert "clutch provides a controllable connection" in answer.generation.instructions

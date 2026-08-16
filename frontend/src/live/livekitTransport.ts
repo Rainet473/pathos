@@ -198,6 +198,22 @@ export class LiveKitConversationTransport {
     );
   }
 
+  async navigateToSlide(slideId: string): Promise<void> {
+    if (this.session === null) {
+      throw new Error("live presentation is not connected");
+    }
+    const normalizedSlideId = slideId.trim();
+    if (!normalizedSlideId) {
+      throw new Error("slide id cannot be blank");
+    }
+    await this.room.localParticipant.publishData(
+      new TextEncoder().encode(
+        JSON.stringify({ action: "navigate", slideId: normalizedSlideId }),
+      ),
+      { reliable: true, topic: PRESENTATION_COMMAND_TOPIC },
+    );
+  }
+
   async disconnect(): Promise<void> {
     if (this.disconnected) return;
     this.disconnected = true;

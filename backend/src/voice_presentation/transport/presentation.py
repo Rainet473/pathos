@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 from voice_presentation.application.live_presentation import LivePresentationView
@@ -43,6 +43,21 @@ class PresentationStateUpdate(BaseModel):
 
 
 class PresentationCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        frozen=True,
+    )
 
-    action: Literal["continue"]
+    action: Literal["continue", "navigate"]
+    slide_id: str | None = None
+
+    @model_validator(mode="after")
+    def fields_match_action(self) -> "PresentationCommand":
+        if self.action == "navigate":
+            if self.slide_id is None or not self.slide_id.strip():
+                raise ValueError("navigate requires a non-blank slideId")
+        elif self.slide_id is not None:
+            raise ValueError("slideId is only valid for navigate")
+        return self

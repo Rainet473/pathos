@@ -16,6 +16,7 @@ pytestmark = pytest.mark.offline
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SLICE_TWO_DECK = REPOSITORY_ROOT / "content" / "slice-two.json"
+SIX_SLIDE_DECK = REPOSITORY_ROOT / "assets" / "motorcycle-controls" / "slide-breakdown.json"
 
 
 def new_session() -> FakePresentationSession:
@@ -132,3 +133,26 @@ def test_clarification_stays_waiting_even_when_continue_was_requested():
     assert waiting_for_clarification.scope_mode.value == "needs_clarification"
     assert waiting_for_clarification.state.phase is PresentationPhase.WAITING
     assert waiting_for_clarification.state.active_playout is None
+
+
+def test_manual_browse_interrupts_fake_narration_and_resume_restores_cursor():
+    deck = JsonMaterialRepository(SIX_SLIDE_DECK).load()
+    session = FakePresentationSession(deck, session_id="manual-browse")
+    presenting = session.start()
+    cursor = presenting.state.presentation_cursor
+
+    browsed = session.navigate_to_slide("braking-abs")
+
+    assert browsed.state.phase is PresentationPhase.WAITING
+    assert browsed.state.presentation_cursor == cursor
+    assert browsed.state.interrupted_cursor == cursor
+    assert browsed.state.visible_slide_id == "braking-abs"
+    assert browsed.committed_beats == ()
+
+    resumed = session.continue_presentation()
+
+    assert resumed.state.phase is PresentationPhase.PRESENTING
+    assert resumed.state.presentation_cursor == cursor
+    assert resumed.state.visible_slide_id == cursor.slide_id
+    assert resumed.state.active_playout is not None
+    assert resumed.state.active_playout.cursor == cursor

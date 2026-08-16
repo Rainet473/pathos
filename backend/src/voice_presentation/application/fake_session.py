@@ -58,6 +58,7 @@ class FakeSessionView(BaseModel):
     )
 
     session_id: str
+    deck_id: str
     title: str
     state: PresentationState
     slides: tuple[SlideView, ...]
@@ -90,6 +91,7 @@ class FakePresentationSession:
         deck = self._controller.deck
         return FakeSessionView(
             session_id=self._session_id,
+            deck_id=deck.id,
             title=deck.title,
             state=self._controller.state.model_copy(deep=True),
             slides=tuple(
@@ -129,7 +131,10 @@ class FakePresentationSession:
             raise RuntimeError("fake runtime returned an invalid interruption event")
         events = list(self._controller.playout_interrupted(turn_id=active.turn_id))
 
-        decision = self._policy.classify(question)
+        decision = self._policy.classify(
+            question,
+            preferred_slide_id=self._controller.state.visible_slide_id,
+        )
         effective_preference = continuation_preference
         if decision.scope_mode is ScopeMode.NEEDS_CLARIFICATION:
             effective_preference = ContinuationPreference.ASK_BEFORE_CONTINUING
@@ -222,6 +227,19 @@ class FakePresentationSession:
         turn_id = self._next_turn_id("narration")
         events = list(self._controller.continue_presentation(turn_id=turn_id))
         events.extend(self._start_narration_playout(turn_id))
+        return self._finish_action(events)
+
+    def navigate_to_slide(self, slide_id: str) -> FakeSessionView:
+        events: list[DomainEvent] = []
+        active = self._runtime.active_playout
+        if active is not None:
+            if active.purpose is not PlayoutPurpose.NARRATION:
+                raise RuntimeError("manual navigation is unavailable during answer playout")
+            interrupted = self._runtime.interrupt_playout(turn_id=active.turn_id)
+            if interrupted.type is not VoiceEventType.PLAYOUT_INTERRUPTED:
+                raise RuntimeError("fake runtime returned an invalid interruption event")
+            events.extend(self._controller.playout_interrupted(turn_id=active.turn_id))
+        events.extend(self._controller.navigate_to_slide(slide_id=slide_id))
         return self._finish_action(events)
 
     def _start_narration_playout(self, turn_id: str) -> tuple[DomainEvent, ...]:

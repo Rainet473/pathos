@@ -60,6 +60,7 @@ export interface DomainEventSnapshot {
 
 export interface FakeSessionSnapshot {
   sessionId: string;
+  deckId: string;
   title?: string;
   state: PresentationSnapshot;
   slides: SlideSummary[];

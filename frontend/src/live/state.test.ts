@@ -229,6 +229,7 @@ function presentationUpdate(sessionVersion: number) {
     emittedAt: "2026-08-16T10:00:00Z",
     view: {
       sessionId: attempt,
+      deckId: "motorcycle-controls",
       title: "How a Motorcycle Responds to Your Controls",
       state: {
         sessionVersion,

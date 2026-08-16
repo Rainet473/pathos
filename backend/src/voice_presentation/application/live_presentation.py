@@ -48,6 +48,7 @@ class LivePresentationView(BaseModel):
     )
 
     session_id: str
+    deck_id: str
     title: str
     state: PresentationState
     slides: tuple[SlideView, ...]
@@ -87,6 +88,7 @@ class ApplicationPresentationSession:
         deck = self._controller.deck
         return LivePresentationView(
             session_id=self._session_id,
+            deck_id=deck.id,
             title=deck.title,
             state=self._controller.state.model_copy(deep=True),
             slides=tuple(
@@ -176,7 +178,10 @@ class ApplicationPresentationSession:
         if not question:
             raise ValueError("question cannot be blank")
 
-        decision = self._policy.classify(question)
+        decision = self._policy.classify(
+            question,
+            preferred_slide_id=self._controller.state.visible_slide_id,
+        )
         preference = self._continuation_preference(question)
         if decision.scope_mode is ScopeMode.NEEDS_CLARIFICATION:
             preference = ContinuationPreference.ASK_BEFORE_CONTINUING
@@ -206,6 +211,10 @@ class ApplicationPresentationSession:
         events = self._controller.continue_presentation(turn_id=turn_id)
         generation = self._narration_directive(turn_id)
         return self._finish(events, generation=generation)
+
+    def navigate_to_slide(self, slide_id: str) -> PresentationActionResult:
+        events = self._controller.navigate_to_slide(slide_id=slide_id)
+        return self._finish(events)
 
     def _narration_directive(self, turn_id: str) -> GenerationDirective:
         cursor = self._controller.state.presentation_cursor

@@ -55,3 +55,32 @@ but must remain visible during later breadth and release work.
 - **Remaining acceptance case:** repeat the relevant spoken variants in a bounded
   live full-deck observation and verify that STT wording still resolves to the
   intended mode. Generated prose must remain unable to choose navigation.
+
+## KI-004 — Manual navigation during answer playout is deferred
+
+- **Status:** deferred to multi-modal interaction hardening.
+- **Behavior:** the navigable deck is enabled before narration, during narration,
+  while waiting, and after completion. It is intentionally disabled while an
+  answer is speaking in the first manual-navigation slice.
+- **Reason:** interrupting an answer to browse raises a separate product choice:
+  discard the answer, preserve a resumable answer cursor, or treat the slide
+  change as contextual input to a replacement answer. That transition should be
+  specified rather than inferred from narration semantics.
+- **Later acceptance case:** choose and test one explicit answer-interruption
+  policy, including late/stale provider callbacks and repeated slide selections.
+
+## KI-005 — Authoring-format import is not implemented
+
+- **Status:** deferred to the presentation-ingestion slice.
+- **Behavior:** `assets/<deck-id>/slide-breakdown.json` is the portable runtime
+  contract. The motorcycle package now includes the user-authored `deck.pptx`
+  and exact extracted slide renders, but no general import command parses a new
+  deck or produces the normalized handout yet. `additional-context.json` remains
+  reserved and unloaded.
+- **Reason:** PPTX is an authoring source, while the application requires stable
+  semantic slide IDs, narration beats, evidence, and visual descriptions that a
+  raw deck does not guarantee. The current source is especially illustrative:
+  every PowerPoint slide is one full-slide raster image with no editable semantic
+  structure for the runtime to consume.
+- **Later acceptance case:** a deterministic importer turns a supplied deck plus
+  handout into a validated package and emits a review report before runtime use.

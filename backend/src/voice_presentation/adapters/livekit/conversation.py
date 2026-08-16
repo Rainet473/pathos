@@ -427,6 +427,12 @@ class LiveKitConversationSession:
             if command.action == "continue":
                 self._touch_activity()
                 self._queue_presentation(self._continue_presentation())
+            elif command.action == "navigate":
+                assert command.slide_id is not None
+                self._touch_activity()
+                self._queue_presentation(
+                    self._navigate_presentation(command.slide_id)
+                )
 
         @self._room.on("participant_disconnected")
         def on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
@@ -711,6 +717,23 @@ class LiveKitConversationSession:
             await self._publish_presentation(result)
             if result.generation is not None:
                 self._execute_generation(result.generation)
+
+    async def _navigate_presentation(self, slide_id: str) -> None:
+        if self._presentation_session is None:
+            return
+        async with self._presentation_lock:
+            binding = self._active_speech
+            if binding is not None and binding.turn_id not in self._settled_turns:
+                binding.handle.interrupt()
+                if not binding.started:
+                    started = self._presentation_session.playout_started(
+                        turn_id=binding.turn_id
+                    )
+                    binding.started = True
+                    await self._publish_presentation(started)
+                await self._settle_binding_locked(binding, interrupted=True)
+            result = self._presentation_session.navigate_to_slide(slide_id)
+            await self._publish_presentation(result)
 
     async def _speech_done(self, binding: "_SpeechBinding") -> None:
         if self._presentation_session is None:

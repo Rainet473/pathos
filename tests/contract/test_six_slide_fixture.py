@@ -8,7 +8,7 @@ import pytest
 pytestmark = pytest.mark.offline
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SIX_SLIDE_DECK = REPOSITORY_ROOT / "content" / "motorcycle-controls.json"
+SIX_SLIDE_DECK = REPOSITORY_ROOT / "assets" / "motorcycle-controls" / "slide-breakdown.json"
 
 EXPECTED_SLIDES = [
     "control-loop",

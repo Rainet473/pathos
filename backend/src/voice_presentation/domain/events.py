@@ -33,6 +33,7 @@ class SlideChangeReason(StrEnum):
     PRESENTATION = "presentation"
     QUESTION = "question"
     RESTORE = "restore"
+    USER = "user"
 
 
 class DomainEvent(BaseModel):

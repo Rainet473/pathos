@@ -242,6 +242,21 @@ describe("LiveKit conversation transport", () => {
     await transport.disconnect();
   });
 
+  it("sends a validated manual slide navigation command only after connection", async () => {
+    const { room, transport } = setup();
+
+    await expect(transport.navigateToSlide("clutch-and-gears")).rejects.toThrow("not connected");
+    await transport.connect(session);
+    await transport.navigateToSlide("clutch-and-gears");
+
+    const call = room.localParticipant.publishCalls.at(-1) as unknown[];
+    expect(new TextDecoder().decode(call[0] as Uint8Array)).toBe(
+      JSON.stringify({ action: "navigate", slideId: "clutch-and-gears" }),
+    );
+    expect(call[1]).toEqual({ reliable: true, topic: "voice-presentation.command.v1" });
+    await transport.disconnect();
+  });
+
   it("attaches remote audio and releases microphone, audio and room exactly once", async () => {
     const { room, microphone, transport, appended } = setup();
     const audio = new FakeAudioTrack();
@@ -344,6 +359,7 @@ function presentationUpdate() {
     emittedAt: "2026-08-16T10:00:00Z",
     view: {
       sessionId: session.attemptId,
+      deckId: "motorcycle-controls",
       title: "How a Motorcycle Responds to Your Controls",
       state: {
         sessionVersion: 2,

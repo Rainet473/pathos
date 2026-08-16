@@ -1,12 +1,13 @@
 import { useEffect, useReducer, useRef } from "react";
 
 import type { PresentationPhase } from "../presentation/state";
-import { SlideVisual } from "../presentation/slideVisuals";
 import { createLiveSession } from "./api";
+import { DeckSlideVisual } from "./deckSlideVisual";
 import { LiveKitConversationTransport } from "./livekitTransport";
 import { createLiveAttemptIdentifiers } from "./protocol";
 import { initialLiveState, reduceLiveState, type LivePhase } from "./state";
 import type { LiveSessionEndReason } from "./lifecycle";
+import { adjacentSlideId } from "./slideNavigation";
 
 export default function LiveConversationApp() {
   const [state, dispatch] = useReducer(reduceLiveState, undefined, initialLiveState);
@@ -110,6 +111,19 @@ export default function LiveConversationApp() {
     }
   }
 
+  async function navigateToSlide(slideId: string) {
+    if (state.attemptId === null) return;
+    try {
+      await transport.current?.navigateToSlide(slideId);
+    } catch (error) {
+      dispatch({
+        type: "failed",
+        attemptId: state.attemptId,
+        reason: error instanceof Error ? error.message : "Slide navigation could not be sent.",
+      });
+    }
+  }
+
   async function unlockAudio() {
     if (state.attemptId === null) return;
     try {
@@ -160,6 +174,12 @@ export default function LiveConversationApp() {
   const visibleSlide =
     snapshot.slides.find((slide) => slide.id === snapshot.state.visibleSlideId) ??
     snapshot.slides[0];
+  const visibleSlideIndex = snapshot.slides.findIndex(
+    (slide) => slide.id === visibleSlide.id,
+  );
+  const previousSlideId = adjacentSlideId(snapshot.slides, visibleSlide.id, -1);
+  const nextSlideId = adjacentSlideId(snapshot.slides, visibleSlide.id, 1);
+  const canNavigate = isActive(state.phase) && presentationPhase !== "answering";
 
   return (
     <main className="presentation-shell live-presentation-shell">
@@ -173,13 +193,49 @@ export default function LiveConversationApp() {
 
       <section className="presentation-grid" aria-live="polite">
         <article className="slide-card">
-          <div className="slide-number">Application-selected slide</div>
-          <h1>{visibleSlide.title}</h1>
-          <p className="slide-headline">{visibleSlide.headline}</p>
-          <SlideVisual slideId={visibleSlide.id} description={visibleSlide.visualDescription} />
-          <ul className="slide-labels">
-            {visibleSlide.labels.map((label) => <li key={label}>{label}</li>)}
-          </ul>
+          <div className="deck-navigation">
+            <div>
+              <span className="slide-number">Navigable presentation deck</span>
+              <span className="slide-position">
+                Slide {visibleSlideIndex + 1} of {snapshot.slides.length}
+              </span>
+            </div>
+            <div className="deck-navigation-actions">
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={!canNavigate || previousSlideId === null}
+                onClick={() => previousSlideId && void navigateToSlide(previousSlideId)}
+              >
+                Previous
+              </button>
+              <select
+                aria-label="Visible slide"
+                value={visibleSlide.id}
+                disabled={!canNavigate}
+                onChange={(event) => void navigateToSlide(event.target.value)}
+              >
+                {snapshot.slides.map((slide, index) => (
+                  <option key={slide.id} value={slide.id}>
+                    {index + 1}. {slide.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={!canNavigate || nextSlideId === null}
+                onClick={() => nextSlideId && void navigateToSlide(nextSlideId)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          <DeckSlideVisual
+            key={`${snapshot.deckId}:${visibleSlide.id}`}
+            deckId={snapshot.deckId}
+            slide={visibleSlide}
+          />
         </article>
 
         <aside className="state-panel">
@@ -350,10 +406,10 @@ function presentationPhaseLabel(phase: PresentationPhase): string {
 function presentationPhaseDescription(phase: PresentationPhase): string {
   return {
     ready: "No narration is active.",
-    presenting: "The selected beat remains uncommitted until its audio finishes.",
+    presenting: "The selected beat remains uncommitted until its audio finishes. Browsing another slide interrupts narration and pauses the cursor.",
     interrupted: "The unfinished beat is preserved while your question is prepared.",
     answering: "The answer has its own turn; the original beat remains uncommitted.",
-    waiting: "The answer finished. Narration will not resume without permission.",
-    completed: "Verified narration playout committed the beat exactly once.",
+    waiting: "Narration is paused. Browse freely; Continue restores the semantic cursor.",
+    completed: "Verified narration playout committed the beat exactly once. The deck remains browsable.",
   }[phase];
 }

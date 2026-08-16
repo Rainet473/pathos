@@ -10,6 +10,7 @@ export const PRESENTATION_COMMAND_TOPIC = "voice-presentation.command.v1";
 
 export interface LivePresentationView {
   sessionId: string;
+  deckId: string;
   title: string;
   state: PresentationSnapshot;
   slides: SlideSummary[];
@@ -37,6 +38,7 @@ export function parsePresentationStateUpdate(
       typeof value.attemptId !== "string" ||
       typeof value.emittedAt !== "string" ||
       typeof value.view.sessionId !== "string" ||
+      typeof value.view.deckId !== "string" ||
       typeof value.view.title !== "string" ||
       typeof state.sessionVersion !== "number" ||
       typeof state.phase !== "string" ||

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import FileResponse
 
 from voice_presentation.application.fake_session import FakeSessionView
 from voice_presentation.application.fake_sessions import (
@@ -13,7 +14,10 @@ from voice_presentation.application.fake_sessions import (
     FakeSessionNotFound,
     FakeSessionStore,
 )
-from voice_presentation.content.repository import JsonMaterialRepository
+from voice_presentation.content.repository import (
+    DeckPackageRepository,
+    JsonMaterialRepository,
+)
 from voice_presentation.domain.controller import TransitionRejected
 from voice_presentation.transport.bootstrap import (
     ProbeBootstrapService,
@@ -63,6 +67,17 @@ def create_app(
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/decks/{deck_id}/slides/{slide_id}/render")
+    async def get_deck_slide_render(deck_id: str, slide_id: str) -> FileResponse:
+        try:
+            path = DeckPackageRepository(_asset_root(), deck_id).render_path(slide_id)
+        except (ValueError, FileNotFoundError):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="deck slide render not found",
+            ) from None
+        return FileResponse(path, media_type="image/png")
 
     if bootstrap_service is not None:
 
@@ -247,10 +262,13 @@ def _live_presentation_session(session_id: str):
 
 
 def _full_deck():
-    repository_root = Path(__file__).resolve().parents[4]
-    return JsonMaterialRepository(
-        repository_root / "content" / "motorcycle-controls.json"
+    return DeckPackageRepository(
+        _asset_root(), "motorcycle-controls"
     ).load()
+
+
+def _asset_root() -> Path:
+    return Path(__file__).resolve().parents[4] / "assets"
 
 
 def _slice_two_deck():
