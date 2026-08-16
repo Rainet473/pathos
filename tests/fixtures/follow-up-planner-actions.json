@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "name": "conversation-citation",
+      "context": {
+        "followUpTurnId": "user-follow-up-0003",
+        "sessionVersion": 10,
+        "currentSlideId": "control-loop",
+        "visibleSlideId": "control-loop",
+        "continuationPreference": "continue_after_answer"
+      },
+      "actions": [
+        {
+          "type": "submit_answer_plan",
+          "input": {
+            "scope": "grounded",
+            "groundingSource": "conversation",
+            "answerBrief": "Clarify that response means the motorcycle's change after a rider input.",
+            "supportingTurnIds": ["narration-0002"],
+            "evidenceIds": [],
+            "supportingSlideIds": ["control-loop"],
+            "focusSlideId": null,
+            "clarificationPrompt": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "material-search",
+      "context": {
+        "followUpTurnId": "user-follow-up-0007",
+        "sessionVersion": 10,
+        "currentSlideId": "clutch-and-gears",
+        "visibleSlideId": "clutch-and-gears",
+        "continuationPreference": "continue_after_answer"
+      },
+      "actions": [
+        {
+          "type": "search_material",
+          "input": {
+            "keywords": ["clutch", "plates", "friction zone", "partial engagement"],
+            "phrases": ["friction zone", "partial engagement"],
+            "slideIds": ["clutch-and-gears"],
+            "includeNeighbors": true,
+            "maxResults": 3
+          }
+        },
+        {
+          "type": "submit_answer_plan",
+          "input": {
+            "scope": "grounded",
+            "groundingSource": "presentation",
+            "answerBrief": "Explain that partial plate contact transfers some torque while relative motion remains and creates heat.",
+            "supportingTurnIds": ["narration-0006"],
+            "evidenceIds": ["motorcycle-controls.clutch-and-gears.narration.1"],
+            "supportingSlideIds": ["clutch-and-gears"],
+            "focusSlideId": "clutch-and-gears",
+            "clarificationPrompt": null
+          }
+        }
+      ]
+    }
+  ]
+}
