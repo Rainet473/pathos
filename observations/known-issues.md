@@ -5,7 +5,7 @@ but must remain visible during later breadth and release work.
 
 ## KI-001 — Answer-and-continue response asks for redundant permission
 
-- **Status:** deferred to prompt-quality hardening.
+- **Status:** prevented offline; live follow-up verification remains blocked.
 - **Observed:** 16 August 2026, attempt
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
 - **Behavior:** after the listener explicitly authorized continuation, the answer
@@ -19,10 +19,14 @@ but must remain visible during later breadth and release work.
 - **Later acceptance case:** an answer with `continue_after_answer` contains no
   permission-seeking or promise to wait; application-owned resumption still occurs
   only after verified answer playout.
+- **Offline mitigation:** the validated-plan answer directive now explicitly
+  forbids another permission request when continuation is already authorized, and
+  the LiveKit bridge proves resumption starts only after answer playout settles.
 
 ## KI-002 — Transcript discontinuity at interruption boundaries
 
-- **Status:** deferred to transcript presentation hardening.
+- **Status:** incomplete-continuation fragments hardened offline; broader live
+  transcript verification remains open.
 - **Observed:** 16 August 2026, attempts
   `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` and
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
@@ -34,6 +38,10 @@ but must remain visible during later breadth and release work.
   yet a perfectly continuous reading record.
 - **Constraint:** do not fabricate missing words or merge across an intervening
   assistant turn merely to improve appearance.
+- **Offline mitigation:** an STT turn ending in an incomplete continuation tail,
+  such as “Then”, waits for one bounded adjacent fragment. If that fragment
+  arrives before answer preparation begins, the application plans the combined
+  native text once. Ordinary completed turns retain their existing latency.
 - **Later acceptance case:** interrupted segments are represented coherently and
   related STT fragments share an explicit turn identity where the provider exposes
   one; missing provider text remains visibly incomplete rather than invented.
@@ -87,7 +95,7 @@ but must remain visible during later breadth and release work.
 
 ## KI-006 — Referential follow-up questions can lose their antecedent
 
-- **Status:** deferred to conversational-retrieval hardening.
+- **Status:** mitigated offline; live follow-up verification remains blocked.
 - **Observed:** 16 August 2026, attempt
   `35a5be63-5af1-447d-871d-e76ce8cdc3b8`.
 - **Behavior:** short follow-ups such as “Can you explain me once again how this
@@ -106,3 +114,51 @@ but must remain visible during later breadth and release work.
   application input, prove the same question is classified consistently after
   interruption and manual navigation, and retain the current deterministic
   transition checks.
+- **Offline mitigation:** logical-turn provenance now retains actual interrupted
+  assistant text, the silent planner can cite that turn or bounded deck evidence,
+  and only a current application-validated plan can reach answer generation.
+
+## KI-007 — Spoken acronyms can be transcribed as nearby letter sequences
+
+- **Status:** mitigated with bounded authored-term hints; raw planner quality
+  limitation retained.
+- **Observed:** 17 August 2026, attempt
+  `3536b0b3-9285-4934-9290-9c60342a7c30`.
+- **Behavior:** the first spoken `ABS` request arrived as `APS`. The planner
+  searched the incorrect acronym twice and found no presentation evidence. A
+  repeated utterance transcribed as `a b s`, normalized to the correct search,
+  and completed successfully.
+- **Impact:** the bounded reasoning path cannot recover domain intent when the
+  authoritative STT text changes a short acronym.
+- **Constraint:** do not silently rewrite arbitrary acronyms. Any correction must
+  be deck-bounded, observable, and preserve the original transcript.
+- **Mitigation:** exact `ABS` and spaced `A B S` resolve against the authored ABS
+  term. `APS` records one phonetic-neighbor hint without changing the transcript;
+  if planning still fails, the application asks “Did you mean ABS?” and waits.
+  Unrelated `AWS` is not rewritten.
+- **Remaining limitation:** in the bounded live planner probe, Gemma searched the
+  correct `ABS` candidate but then cited the active user turn. Validation rejected
+  the plan and the clarification fallback remained safe; direct acceptance still
+  depends on provider plan quality.
+
+## KI-008 — Recoverable planner validation failures can produce no spoken answer
+
+- **Status:** mitigated offline and wired into the production bridge; a forced
+  live fallback observation remains optional.
+- **Observed:** 17 August 2026, attempts
+  `f15cc0d8-9222-441f-a91c-74217dbcacd5` and
+  `3536b0b3-9285-4934-9290-9c60342a7c30`.
+- **Behavior:** unknown citations or malformed terminal arguments can exhaust the
+  bounded planner and leave only a visible failure, even when a useful answer
+  could still be delivered safely.
+- **Implemented behavior:** first attempt bounded correction. If support still
+  cannot be validated, discard citations and focus navigation, then deliver a
+  disclosed model-knowledge or boundary response when the request is safe and
+  answerable.
+- **Constraint:** graceful degradation must create a newly valid application-owned
+  directive; it must never speak an invalid plan, preserve unsupported focus, or
+  bypass clarification and safety boundaries.
+- **Verified:** citation and schema failures each produce at most one new
+  application-owned fallback, retain default/explicit continuation semantics,
+  and never mutate the semantic cursor. Timeout, provider, stale, cancellation,
+  disconnect, unknown-tool, and multiple-tool failures remain fail-closed.

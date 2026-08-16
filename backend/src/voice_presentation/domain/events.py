@@ -21,6 +21,8 @@ class DomainEventType(StrEnum):
     SLIDE_CHANGED = "slide_changed"
     PLAYOUT_INTERRUPTED = "playout_interrupted"
     QUESTION_CLASSIFIED = "question_classified"
+    FOLLOW_UP_PLANNING_RECOVERED = "follow_up_planning_recovered"
+    FOLLOW_UP_PLANNING_FAILED = "follow_up_planning_failed"
     ANSWER_COMPLETED = "answer_completed"
     PRESENTATION_WAITING = "presentation_waiting"
     PRESENTATION_RESUMED = "presentation_resumed"
@@ -54,3 +56,8 @@ class DomainEvent(BaseModel):
     continuation_preference: ContinuationPreference | None = None
     attempted_action: str | None = Field(default=None, min_length=1)
     allowed_actions: tuple[str, ...] = ()
+    reason_code: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )

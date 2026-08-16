@@ -380,6 +380,10 @@ function presentationUpdate() {
       }],
       events: [],
       scopeMode: null,
+      groundingSource: null,
+      planningStage: null,
+      planningFailureCode: null,
+      planningRecoveryCode: null,
       committedBeats: [],
     },
   };

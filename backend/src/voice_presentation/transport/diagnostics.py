@@ -168,8 +168,14 @@ class ConversationDiagnostics:
         return self._record(metric_type, elapsed_ms, fields)
 
     def record_turn_metrics(
-        self, metrics: Mapping[str, object]
+        self,
+        metrics: Mapping[str, object],
+        *,
+        turn_id: str | None = None,
+        turn_purpose: str | None = None,
     ) -> ConversationDiagnosticEvent:
+        if (turn_id is None) is not (turn_purpose is None):
+            raise ValueError("turn identity and purpose must be supplied together")
         elapsed_ms = self._elapsed_ms()
         field_names = {
             "end_of_turn_delay": "endOfUtteranceDelayMs",
@@ -182,7 +188,42 @@ class ConversationDiagnostics:
             value = metrics.get(source_name)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 fields[wire_name] = _milliseconds(value)
+        if turn_id is not None and turn_purpose is not None:
+            if not turn_id.strip() or not turn_purpose.strip():
+                raise ValueError("turn identity and purpose cannot be blank")
+            fields["turnId"] = turn_id.strip()
+            fields["turnPurpose"] = turn_purpose.strip()
         return self._record("turn_metrics", elapsed_ms, fields)
+
+    def record_follow_up_planning(
+        self,
+        *,
+        duration_seconds: float,
+        provider_duration_seconds: float,
+        request_count: int,
+        tool_steps: int,
+        search_calls: int,
+        status: str,
+        input_tokens: int,
+        cached_input_tokens: int,
+        total_tokens: int,
+    ) -> ConversationDiagnosticEvent:
+        """Record silent planning separately from answer LLM and TTS metrics."""
+
+        fields: dict[str, DiagnosticScalar] = {
+            "planningDurationMs": _milliseconds(duration_seconds),
+            "planningProviderDurationMs": _milliseconds(
+                provider_duration_seconds
+            ),
+            "planningRequestCount": max(0, request_count),
+            "planningToolSteps": max(0, tool_steps),
+            "planningSearchCalls": max(0, search_calls),
+            "planningStatus": status,
+            "planningInputTokens": max(0, input_tokens),
+            "planningCachedInputTokens": max(0, cached_input_tokens),
+            "planningTotalTokens": max(0, total_tokens),
+        }
+        return self._record("follow_up_planning", self._elapsed_ms(), fields)
 
     def _realtime_model_fields(
         self, metrics: object, *, elapsed_ms: int

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from voice_presentation.server.app import (
+    _selected_follow_up_planner_factory,
     _selected_voice_session_factory,
     create_configured_app,
 )
@@ -115,3 +116,23 @@ def test_provider_selector_rejects_unsupported_provider():
             livekit_api_key="configured-livekit-key",
             livekit_api_secret="configured-livekit-secret",
         )
+
+
+def test_silent_follow_up_planner_is_enabled_only_for_selected_pipeline():
+    ledger = object()
+
+    pipeline = _selected_follow_up_planner_factory(
+        selected_provider="livekit_inference_pipeline",
+        livekit_api_key="configured-livekit-key",
+        livekit_api_secret="configured-livekit-secret",
+        ledger=ledger,
+    )
+    realtime = _selected_follow_up_planner_factory(
+        selected_provider="openai_realtime",
+        livekit_api_key="configured-livekit-key",
+        livekit_api_secret="configured-livekit-secret",
+        ledger=ledger,
+    )
+
+    assert callable(pipeline)
+    assert realtime is None

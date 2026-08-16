@@ -8,6 +8,12 @@ import { createLiveAttemptIdentifiers } from "./protocol";
 import { initialLiveState, reduceLiveState, type LivePhase } from "./state";
 import type { LiveSessionEndReason } from "./lifecycle";
 import { adjacentSlideId } from "./slideNavigation";
+import {
+  planningFailureMessage,
+  planningRecoveryMessage,
+  planningStatusDescription,
+  planningStatusLabel,
+} from "./planningStatus";
 
 export default function LiveConversationApp() {
   const [state, dispatch] = useReducer(reduceLiveState, undefined, initialLiveState);
@@ -179,7 +185,16 @@ export default function LiveConversationApp() {
   );
   const previousSlideId = adjacentSlideId(snapshot.slides, visibleSlide.id, -1);
   const nextSlideId = adjacentSlideId(snapshot.slides, visibleSlide.id, 1);
-  const canNavigate = isActive(state.phase) && presentationPhase !== "answering";
+  const canNavigate =
+    isActive(state.phase) &&
+    presentationPhase !== "answering" &&
+    snapshot.planningStage === null;
+  const applicationStatusLabel = snapshot.planningStage
+    ? planningStatusLabel(snapshot.planningStage)
+    : presentationPhaseLabel(presentationPhase);
+  const applicationStatusDescription = snapshot.planningStage
+    ? planningStatusDescription(snapshot.planningStage)
+    : presentationPhaseDescription(presentationPhase);
 
   return (
     <main className="presentation-shell live-presentation-shell">
@@ -238,11 +253,11 @@ export default function LiveConversationApp() {
         </article>
 
         <aside className="state-panel">
-          <div className={`phase-badge phase-${presentationPhase}`}>
+          <div className={`phase-badge phase-${snapshot.planningStage ? "planning" : presentationPhase}`}>
             <span className="status-dot" aria-hidden="true" />
             <div>
               <small>Application phase</small>
-              <strong>{presentationPhaseLabel(presentationPhase)}</strong>
+              <strong>{applicationStatusLabel}</strong>
             </div>
           </div>
           <dl className="state-grid">
@@ -251,8 +266,23 @@ export default function LiveConversationApp() {
             <div><dt>Turn identity</dt><dd>{snapshot.state.activeTurnId ?? "none"}</dd></div>
             <div><dt>Session version</dt><dd>{snapshot.state.sessionVersion}</dd></div>
           </dl>
-          <p className="phase-copy">{presentationPhaseDescription(presentationPhase)}</p>
-          {snapshot.scopeMode ? <p className="scope-mode">Answer mode: {snapshot.scopeMode}</p> : null}
+          <p className="phase-copy">{applicationStatusDescription}</p>
+          {snapshot.scopeMode ? (
+            <p className="scope-mode">
+              Answer mode: {snapshot.scopeMode}
+              {snapshot.groundingSource ? ` · source: ${snapshot.groundingSource}` : ""}
+            </p>
+          ) : null}
+          {snapshot.planningFailureCode ? (
+            <p className="failure">
+              {planningFailureMessage(snapshot.planningFailureCode)}
+            </p>
+          ) : null}
+          {snapshot.planningRecoveryCode ? (
+            <p className="scope-mode">
+              {planningRecoveryMessage(snapshot.planningRecoveryCode)}
+            </p>
+          ) : null}
           <div className="actions presentation-actions">
             {presentationPhase === "waiting" ? (
               <button type="button" onClick={() => void continuePresentation()}>
@@ -305,6 +335,7 @@ export default function LiveConversationApp() {
             <section className="live-timing" aria-label="Latest response timing">
               <h2>Latest response timing</h2>
               <dl className="metrics">
+                <Timing label="Follow-up planning" value={state.timing.planningDurationMs} />
                 <Timing label="End-of-turn detection" value={state.timing.endOfUtteranceDelayMs} />
                 <Timing label="LLM first token" value={state.timing.llmTtftMs} />
                 <Timing label="TTS first audio" value={state.timing.ttsTtfbMs} />

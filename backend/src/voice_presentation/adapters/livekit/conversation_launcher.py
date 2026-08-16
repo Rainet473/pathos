@@ -11,6 +11,7 @@ from typing import Protocol
 from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
 )
+from voice_presentation.domain.content import PresentationDeck
 from voice_presentation.transport.context_trace import (
     InferenceContextLedger,
     NullInferenceContextLedger,
@@ -46,6 +47,7 @@ ConversationFactory = Callable[
     [ConversationSessionSpec, VoiceSessionFactory], RunnableConversationSession
 ]
 PresentationSessionFactory = Callable[[str], ApplicationPresentationSession]
+FollowUpPlannerFactory = Callable[[PresentationDeck], object]
 
 
 class LiveKitConversationSessionLauncher:
@@ -61,6 +63,7 @@ class LiveKitConversationSessionLauncher:
         diagnostic_ledger: ConversationDiagnosticLedger | None = None,
         context_ledger: InferenceContextLedger | None = None,
         presentation_session_factory: PresentationSessionFactory | None = None,
+        follow_up_planner_factory: FollowUpPlannerFactory | None = None,
     ) -> None:
         if ready_timeout_seconds <= 0:
             raise ValueError("ready timeout must be positive")
@@ -73,6 +76,7 @@ class LiveKitConversationSessionLauncher:
         )
         self._context_ledger = context_ledger or NullInferenceContextLedger()
         self._presentation_session_factory = presentation_session_factory
+        self._follow_up_planner_factory = follow_up_planner_factory
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
@@ -98,12 +102,21 @@ class LiveKitConversationSessionLauncher:
                 presentation_session = self._presentation_session_factory(
                     session.attempt_id
                 )
+            follow_up_planner = None
+            if (
+                presentation_session is not None
+                and self._follow_up_planner_factory is not None
+            ):
+                follow_up_planner = self._follow_up_planner_factory(
+                    presentation_session.deck
+                )
             runner = LiveKitConversationSession(
                 session,
                 self._voice_session_factory,
                 diagnostic_ledger=self._diagnostic_ledger,
                 context_ledger=self._context_ledger,
                 presentation_session=presentation_session,
+                follow_up_planner=follow_up_planner,
             )
         else:
             runner = self._conversation_factory(session, self._voice_session_factory)

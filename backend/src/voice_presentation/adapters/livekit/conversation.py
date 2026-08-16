@@ -34,11 +34,14 @@ from voice_presentation.adapters.livekit.conversation_launcher import (
     PresentationSessionFactory,
     RunnableConversationSession,
 )
+from voice_presentation.adapters.livekit.silent_planner import LiveKitSilentPlanner
 from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
+    FollowUpPlanningAction,
     GenerationDirective,
     PresentationActionResult,
 )
+from voice_presentation.domain.reasoning import PlanningStage, PlanningStatus
 from voice_presentation.transport.conversation import ConversationSessionSpec
 from voice_presentation.transport.context_trace import (
     InferenceContextLedger,
@@ -89,6 +92,7 @@ class LiveKitConversationSession:
         http_context_factory: HttpContextFactory = _default_http_context_factory,
         diagnostic_ledger: ConversationDiagnosticLedger | None = None,
         context_ledger: InferenceContextLedger | None = None,
+        follow_up_planner: LiveKitSilentPlanner | None = None,
         transcript_clock: Callable[[], float] = time.monotonic,
         transcript_merge_window_seconds: float = 1.5,
         idle_timeout_seconds: float | None = None,
@@ -133,6 +137,7 @@ class LiveKitConversationSession:
             stable_instructions=spec.instructions,
             ledger=context_ledger,
         )
+        self._follow_up_planner = follow_up_planner
         self._transcript_clock = transcript_clock
         self._transcript_merge_window_seconds = transcript_merge_window_seconds
         self._diagnostic_tasks: set[asyncio.Task[None]] = set()
@@ -147,11 +152,13 @@ class LiveKitConversationSession:
         self._last_final_user_transcript_text = ""
         self._last_final_user_transcript_at: float | None = None
         self._presentation_tasks: set[asyncio.Task[None]] = set()
+        self._follow_up_tasks: set[asyncio.Task[object]] = set()
         self._presentation_lock = asyncio.Lock()
         self._presentation_started = False
         self._pending_generation: GenerationDirective | None = None
         self._active_speech: _SpeechBinding | None = None
         self._settled_turns: set[str] = set()
+        self._logical_assistant_turn_queue: list[str] = []
 
     @property
     def usage_outcome(self) -> str:
@@ -200,6 +207,13 @@ class LiveKitConversationSession:
                             ConversationLifecycleReason(terminal_reason)
                         )
                 finally:
+                    for task in tuple(self._follow_up_tasks):
+                        task.cancel()
+                    if self._follow_up_tasks:
+                        await asyncio.gather(
+                            *self._follow_up_tasks,
+                            return_exceptions=True,
+                        )
                     if self._presentation_tasks:
                         await asyncio.gather(
                             *self._presentation_tasks,
@@ -216,6 +230,9 @@ class LiveKitConversationSession:
                     if self._agent_session is not None:
                         with contextlib.suppress(Exception):
                             await self._agent_session.aclose()
+                    if self._follow_up_planner is not None:
+                        with contextlib.suppress(Exception):
+                            await self._follow_up_planner.aclose()
                     if self._room.isconnected():
                         with contextlib.suppress(Exception):
                             await self._room.disconnect()
@@ -340,17 +357,47 @@ class LiveKitConversationSession:
             if isinstance(metrics, Mapping) and any(
                 name in metrics for name in supported_metric_names
             ):
+                directive = self._pending_generation
+                binding = self._active_speech
                 self._queue_diagnostic(
-                    self._diagnostics.record_turn_metrics(metrics)
+                    self._diagnostics.record_turn_metrics(
+                        metrics,
+                        turn_id=(
+                            directive.turn_id
+                            if directive is not None
+                            else binding.turn_id
+                            if binding is not None
+                            else None
+                        ),
+                        turn_purpose=(
+                            directive.purpose.value
+                            if directive is not None
+                            else binding.purpose
+                            if binding is not None
+                            else None
+                        ),
+                    )
                 )
             role = str(getattr(item, "role", ""))
             text = str(getattr(item, "text_content", "")).strip()
             if role in {"user", "assistant"} and text:
+                provider_item_id = str(getattr(item, "id", "") or "").strip()
+                logical_turn_id: str | None = None
+                if role == "assistant":
+                    logical_turn_id = self._context_trace.logical_turn_id_for_provider(
+                        provider_item_id
+                    )
+                    if (
+                        logical_turn_id is None
+                        and self._logical_assistant_turn_queue
+                    ):
+                        logical_turn_id = self._logical_assistant_turn_queue.pop(0)
                 self._context_trace.add_history_message(
-                    provider_item_id=str(getattr(item, "id", "") or ""),
+                    provider_item_id=provider_item_id,
                     role=role,
                     content=text,
                     interrupted=bool(getattr(item, "interrupted", False)),
+                    logical_turn_id=logical_turn_id,
                 )
             if role != "assistant":
                 return
@@ -502,7 +549,28 @@ class LiveKitConversationSession:
             if result.generation is not None:
                 self._execute_generation(result.generation)
 
-    async def _prepare_user_turn(self, question: str) -> str:
+    async def _prepare_user_turn(
+        self,
+        question: str,
+        provider_item_id: str | None = None,
+    ) -> str | None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._follow_up_tasks.add(task)
+        try:
+            return await self._prepare_user_turn_impl(
+                question,
+                provider_item_id,
+            )
+        finally:
+            if task is not None:
+                self._follow_up_tasks.discard(task)
+
+    async def _prepare_user_turn_impl(
+        self,
+        question: str,
+        provider_item_id: str | None = None,
+    ) -> str | None:
         if self._presentation_session is None:
             raise RuntimeError("presentation session is not configured")
         async with self._presentation_lock:
@@ -520,16 +588,187 @@ class LiveKitConversationSession:
                     await self._publish_presentation(started)
                 await self._settle_binding_locked(binding, interrupted=True)
 
-            result = self._presentation_session.prepare_question(question)
+            if self._follow_up_planner is None:
+                result = self._presentation_session.prepare_question(question)
+                if result.generation is None:
+                    raise RuntimeError(
+                        "question preparation did not issue an answer turn"
+                    )
+                self._pending_generation = result.generation
+                await self._publish_presentation(result)
+                self._record_generation_context(
+                    result.generation,
+                    current_user_message=question,
+                )
+                return result.generation.instructions
+
+            self._logical_assistant_turn_queue = [
+                turn_id
+                for turn_id in self._logical_assistant_turn_queue
+                if turn_id not in self._settled_turns
+            ]
+            planning = self._presentation_session.begin_follow_up(
+                question,
+                provider_item_id=provider_item_id,
+            )
+            await self._publish_follow_up_planning(planning)
+            self._context_trace.register_follow_up(planning.follow_up_turn)
+            snapshot = self._context_trace.reasoning_snapshot(
+                session_version=planning.context.session_version
+            )
+
+            async def on_stage(stage: PlanningStage) -> None:
+                stage_result = self._presentation_session.set_planning_stage(
+                    stage,
+                    follow_up_turn_id=planning.context.follow_up_turn_id,
+                )
+                await self._publish_presentation(stage_result)
+
+            planning_started_at = time.monotonic()
+            try:
+                run = await self._follow_up_planner.plan(
+                    case_name=(
+                        f"{self._spec.attempt_id}:"
+                        f"{planning.context.follow_up_turn_id}"
+                    ),
+                    snapshot=snapshot,
+                    context=planning.context,
+                    active_identity=(
+                        self._presentation_session.active_planning_identity
+                    ),
+                    on_stage=on_stage,
+                )
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(
+                        self._fail_follow_up_planning(
+                            planning,
+                            reason_code="cancelled",
+                        )
+                    )
+                raise
+            except Exception as error:
+                planning_duration = time.monotonic() - planning_started_at
+                self._queue_diagnostic(
+                    self._diagnostics.record_follow_up_planning(
+                        duration_seconds=planning_duration,
+                        provider_duration_seconds=0,
+                        request_count=0,
+                        tool_steps=0,
+                        search_calls=0,
+                        status="provider_error",
+                        input_tokens=0,
+                        cached_input_tokens=0,
+                        total_tokens=0,
+                    )
+                )
+                logger.warning(
+                    "Silent follow-up planning failed for attempt %s (%s)",
+                    self._spec.attempt_id,
+                    type(error).__name__,
+                )
+                await self._fail_follow_up_planning(
+                    planning,
+                    reason_code="provider_error",
+                )
+                return None
+            planning_duration = time.monotonic() - planning_started_at
+            requests = tuple(getattr(run, "requests", ()))
+            usages = tuple(
+                request.usage
+                for request in requests
+                if getattr(request, "usage", None) is not None
+            )
+            self._queue_diagnostic(
+                self._diagnostics.record_follow_up_planning(
+                    duration_seconds=planning_duration,
+                    provider_duration_seconds=(
+                        sum(request.duration_ms for request in requests) / 1000
+                    ),
+                    request_count=len(requests),
+                    tool_steps=run.snapshot.tool_steps,
+                    search_calls=run.snapshot.search_calls,
+                    status=run.snapshot.status.value,
+                    input_tokens=sum(usage.prompt_tokens for usage in usages),
+                    cached_input_tokens=sum(
+                        usage.cached_prompt_tokens for usage in usages
+                    ),
+                    total_tokens=sum(usage.total_tokens for usage in usages),
+                )
+            )
+            self._context_trace.record_planning_trace(run.trace)
+            accepted_plan = run.snapshot.accepted_plan
+            if (
+                run.snapshot.status is not PlanningStatus.ACCEPTED
+                or accepted_plan is None
+            ):
+                failure_code = (
+                    run.failure_code.value
+                    if run.failure_code is not None
+                    else run.snapshot.rejection_code.value
+                    if run.snapshot.rejection_code is not None
+                    else "planning_failed"
+                )
+                try:
+                    recovered = self._presentation_session.recover_answer_plan(
+                        follow_up_turn_id=planning.context.follow_up_turn_id,
+                        reason_code=failure_code,
+                        provenance=snapshot.ledger,
+                    )
+                except ValueError:
+                    await self._fail_follow_up_planning(
+                        planning,
+                        reason_code=failure_code,
+                    )
+                    return None
+                if recovered.generation is None:
+                    raise RuntimeError(
+                        "planning recovery did not issue an answer turn"
+                    )
+                self._pending_generation = recovered.generation
+                await self._publish_presentation(recovered)
+                self._record_generation_context(
+                    recovered.generation,
+                    current_user_message=question,
+                )
+                return recovered.generation.instructions
+
+            result = self._presentation_session.accept_answer_plan(
+                accepted_plan,
+                provenance=snapshot.ledger,
+                search_results=run.snapshot.search_results,
+            )
             if result.generation is None:
                 raise RuntimeError("question preparation did not issue an answer turn")
             self._pending_generation = result.generation
             await self._publish_presentation(result)
-            self._context_trace.record_generation(
+            self._record_generation_context(
                 result.generation,
                 current_user_message=question,
             )
             return result.generation.instructions
+
+    async def _publish_follow_up_planning(
+        self,
+        planning: FollowUpPlanningAction,
+    ) -> None:
+        await self._publish_presentation(
+            PresentationActionResult(view=planning.view)
+        )
+
+    async def _fail_follow_up_planning(
+        self,
+        planning: FollowUpPlanningAction,
+        *,
+        reason_code: str,
+    ) -> None:
+        if self._presentation_session is None:
+            return
+        failed = self._presentation_session.fail_answer_plan(
+            follow_up_turn_id=planning.context.follow_up_turn_id,
+            reason_code=reason_code,
+        )
+        await self._publish_presentation(failed)
 
     async def _mark_playout_started(self) -> None:
         if self._presentation_session is None:
@@ -620,7 +859,7 @@ class LiveKitConversationSession:
     def _execute_generation(self, directive: GenerationDirective) -> None:
         if self._agent_session is None:
             raise RuntimeError("agent session is not started")
-        self._context_trace.record_generation(directive)
+        self._record_generation_context(directive)
         self._pending_generation = directive
         handle = self._agent_session.generate_reply(
             instructions=directive.instructions,
@@ -631,6 +870,19 @@ class LiveKitConversationSession:
         self._bind_speech(handle, directive)
         self._pending_generation = None
 
+    def _record_generation_context(
+        self,
+        directive: GenerationDirective,
+        *,
+        current_user_message: str | None = None,
+    ) -> None:
+        self._context_trace.record_generation(
+            directive,
+            current_user_message=current_user_message,
+        )
+        if directive.turn_id not in self._logical_assistant_turn_queue:
+            self._logical_assistant_turn_queue.append(directive.turn_id)
+
     def _bind_speech(self, handle: object, directive: GenerationDirective) -> None:
         existing = self._active_speech
         if existing is not None and existing.handle is handle:
@@ -638,6 +890,7 @@ class LiveKitConversationSession:
         binding = _SpeechBinding(
             handle=handle,
             turn_id=directive.turn_id,
+            purpose=directive.purpose.value,
         )
         self._active_speech = binding
         handle.add_done_callback(
@@ -725,4 +978,5 @@ class LiveKitConversationSession:
 class _SpeechBinding:
     handle: object
     turn_id: str
+    purpose: str
     started: bool = False

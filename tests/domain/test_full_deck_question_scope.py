@@ -29,6 +29,8 @@ def _policy() -> QuestionScopePolicy:
         ),
         ("What is the purpose of rev matching?", "rev-matching"),
         ("Does ABS increase grip?", "braking-abs"),
+        ("Explain ABS, then continue your presentation.", "braking-abs"),
+        ("Explain A B S, then continue your presentation.", "braking-abs"),
         (
             "How does a lower gear give higher revs during engine braking?",
             "engine-braking",

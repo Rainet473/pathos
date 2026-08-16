@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "recorded-context-session",
+  "sessionVersion": 10,
+  "stableInstructions": "Present concisely while application state remains authoritative. A developer Turn reference annotates only the immediately following message and must never be spoken.",
+  "turns": [
+    {
+      "turnId": "narration-0001",
+      "role": "assistant",
+      "purpose": "narration",
+      "sessionVersion": 10,
+      "slideId": "control-loop",
+      "beatIndex": 0,
+      "providerItemIds": ["provider-assistant-1"],
+      "actualText": "Motorcycle controls form a loop from rider input to tyre force and feedback.",
+      "deliveryStatus": "completed"
+    },
+    {
+      "turnId": "narration-0002",
+      "role": "assistant",
+      "purpose": "narration",
+      "sessionVersion": 10,
+      "slideId": "control-loop",
+      "beatIndex": 1,
+      "providerItemIds": ["provider-assistant-2"],
+      "actualText": "Every input creates a response through the drivetrain or brakes",
+      "deliveryStatus": "interrupted"
+    },
+    {
+      "turnId": "user-follow-up-0003",
+      "role": "user",
+      "purpose": "user_follow_up",
+      "sessionVersion": 10,
+      "visibleSlideId": "control-loop",
+      "interruptedTurnId": "narration-0002",
+      "providerItemIds": ["provider-user-3"],
+      "actualText": "What kind of response do you mean? Please continue after the answer.",
+      "deliveryStatus": "completed"
+    },
+    {
+      "turnId": "answer-0004",
+      "role": "assistant",
+      "purpose": "answer",
+      "sessionVersion": 10,
+      "providerItemIds": ["provider-assistant-4"],
+      "actualText": "Response means a change in force, speed, or direction after a rider input.",
+      "deliveryStatus": "completed",
+      "planId": "answer-plan-0004",
+      "scopeMode": "grounded",
+      "groundingSource": "conversation"
+    },
+    {
+      "turnId": "narration-0005",
+      "role": "assistant",
+      "purpose": "narration",
+      "sessionVersion": 10,
+      "slideId": "control-loop",
+      "beatIndex": 1,
+      "providerItemIds": ["provider-assistant-5"],
+      "actualText": "The rider feels that response as feedback and adjusts the next input.",
+      "deliveryStatus": "completed",
+      "resumedAfterTurnId": "answer-0004"
+    },
+    {
+      "turnId": "narration-0006",
+      "role": "assistant",
+      "purpose": "narration",
+      "sessionVersion": 10,
+      "slideId": "clutch-and-gears",
+      "beatIndex": 0,
+      "providerItemIds": ["provider-assistant-6"],
+      "actualText": "The clutch is a controllable connection between the engine and gearbox",
+      "deliveryStatus": "interrupted"
+    },
+    {
+      "turnId": "user-follow-up-0007",
+      "role": "user",
+      "purpose": "user_follow_up",
+      "sessionVersion": 10,
+      "visibleSlideId": "clutch-and-gears",
+      "interruptedTurnId": "narration-0006",
+      "providerItemIds": ["provider-user-7"],
+      "actualText": "Why can the plates slip in the friction zone? Explain it and continue.",
+      "deliveryStatus": "completed"
+    },
+    {
+      "turnId": "answer-0008",
+      "role": "assistant",
+      "purpose": "answer",
+      "sessionVersion": 10,
+      "providerItemIds": ["provider-assistant-8"],
+      "actualText": "Partial contact transfers some torque while relative plate motion remains, which also creates heat.",
+      "deliveryStatus": "completed",
+      "planId": "answer-plan-0008",
+      "scopeMode": "grounded",
+      "groundingSource": "presentation"
+    },
+    {
+      "turnId": "narration-0009",
+      "role": "assistant",
+      "purpose": "narration",
+      "sessionVersion": 10,
+      "slideId": "clutch-and-gears",
+      "beatIndex": 0,
+      "providerItemIds": ["provider-assistant-9"],
+      "actualText": "The clutch therefore connects engine torque progressively rather than all at once.",
+      "deliveryStatus": "completed",
+      "resumedAfterTurnId": "answer-0008"
+    },
+    {
+      "turnId": "narration-0010",
+      "role": "assistant",
+      "purpose": "narration",
+      "sessionVersion": 10,
+      "slideId": "clutch-and-gears",
+      "beatIndex": 1,
+      "providerItemIds": ["provider-assistant-10"],
+      "actualText": "Inside the friction zone, partial engagement gives the rider fine control over transferred torque.",
+      "deliveryStatus": "completed"
+    }
+  ],
+  "trace": [
+    {"type": "turn_message", "turnId": "narration-0001"},
+    {"type": "turn_message", "turnId": "narration-0002"},
+    {"type": "turn_message", "turnId": "user-follow-up-0003"},
+    {
+      "type": "function_call",
+      "callId": "call-plan-0004",
+      "name": "submit_answer_plan",
+      "arguments": {
+        "scope": "grounded",
+        "groundingSource": "conversation",
+        "answerBrief": "Clarify what response meant in the interrupted explanation.",
+        "supportingTurnIds": ["narration-0002"],
+        "evidenceIds": [],
+        "supportingSlideIds": ["control-loop"],
+        "focusSlideId": null
+      }
+    },
+    {
+      "type": "function_result",
+      "callId": "call-plan-0004",
+      "name": "submit_answer_plan",
+      "output": {"accepted": true, "planId": "answer-plan-0004"},
+      "isError": false
+    },
+    {
+      "type": "application_decision",
+      "decisionId": "decision-0004",
+      "sourceCallId": "call-plan-0004",
+      "planId": "answer-plan-0004",
+      "accepted": true,
+      "reasonCode": "accepted",
+      "supportingTurnIds": ["narration-0002"]
+    },
+    {"type": "turn_message", "turnId": "answer-0004"},
+    {"type": "turn_message", "turnId": "narration-0005"},
+    {"type": "turn_message", "turnId": "narration-0006"},
+    {"type": "turn_message", "turnId": "user-follow-up-0007"},
+    {
+      "type": "function_call",
+      "callId": "call-search-0007-1",
+      "name": "search_material",
+      "arguments": {
+        "keywords": ["clutch", "plates", "friction zone"],
+        "phrases": ["controlled torque transfer"],
+        "slideIds": ["clutch-and-gears"],
+        "includeNeighbors": true,
+        "maxResults": 3
+      }
+    },
+    {
+      "type": "function_result",
+      "callId": "call-search-0007-1",
+      "name": "search_material",
+      "output": {
+        "queryId": "material-query-0007-1",
+        "hits": [
+          {
+            "evidenceId": "clutch-and-gears.segment-2",
+            "slideId": "clutch-and-gears",
+            "text": "Partial engagement permits controlled torque transfer while the plates still move relative to one another."
+          }
+        ]
+      },
+      "isError": false
+    },
+    {
+      "type": "function_call",
+      "callId": "call-plan-0008",
+      "name": "submit_answer_plan",
+      "arguments": {
+        "scope": "grounded",
+        "groundingSource": "presentation",
+        "answerBrief": "Explain partial torque transfer, relative plate motion, and heat briefly.",
+        "supportingTurnIds": ["narration-0006"],
+        "evidenceIds": ["clutch-and-gears.segment-2"],
+        "supportingSlideIds": ["clutch-and-gears"],
+        "focusSlideId": "clutch-and-gears"
+      }
+    },
+    {
+      "type": "function_result",
+      "callId": "call-plan-0008",
+      "name": "submit_answer_plan",
+      "output": {"accepted": true, "planId": "answer-plan-0008"},
+      "isError": false
+    },
+    {
+      "type": "application_decision",
+      "decisionId": "decision-0008",
+      "sourceCallId": "call-plan-0008",
+      "planId": "answer-plan-0008",
+      "accepted": true,
+      "reasonCode": "accepted",
+      "supportingTurnIds": ["narration-0006"]
+    },
+    {"type": "turn_message", "turnId": "answer-0008"},
+    {"type": "turn_message", "turnId": "narration-0009"},
+    {"type": "turn_message", "turnId": "narration-0010"}
+  ]
+}

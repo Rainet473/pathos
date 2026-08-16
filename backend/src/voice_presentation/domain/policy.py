@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from voice_presentation.domain.content import PresentationDeck
 from voice_presentation.domain.contracts import ScopeMode
+from voice_presentation.domain.terminology import resolve_terminology_hints
 
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -80,6 +81,14 @@ class QuestionScopePolicy:
         slides = self._ordered_slides(preferred_slide_id)
 
         normalized = " ".join(_WORD.findall(question.lower()))
+        terminology_hints = resolve_terminology_hints(question, self._deck)
+        exact_authored_terms = {
+            hint.authored_term.lower()
+            for hint in terminology_hints
+            if hint.match_kind in {"exact", "spaced"}
+        }
+        if exact_authored_terms:
+            normalized = " ".join((normalized, *sorted(exact_authored_terms)))
         ambiguous_phrases = (
             "why does it jerk",
             "should i use it every time",
@@ -107,6 +116,7 @@ class QuestionScopePolicy:
         best_evidence: tuple[str, ...] = ()
         best_score = 0
         best_overlap = 0
+        best_authored_match = False
         for slide in slides:
             for deep_dive in slide.deep_dive:
                 concept_terms = self._terms(deep_dive.concept)
@@ -117,13 +127,19 @@ class QuestionScopePolicy:
                     question_terms & detail_terms
                 )
                 overlap = len(question_terms & (concept_terms | detail_terms))
-                if (score, overlap) > (best_score, best_overlap):
+                authored_match = bool(exact_authored_terms & concept_terms)
+                if (score, overlap, authored_match) > (
+                    best_score,
+                    best_overlap,
+                    best_authored_match,
+                ):
                     best_score = score
                     best_overlap = overlap
+                    best_authored_match = authored_match
                     best_slide_id = slide.id
                     best_evidence = (deep_dive.explanation, *deep_dive.caveats)
 
-        if best_score >= 3 and best_overlap >= 2:
+        if best_score >= 3 and (best_overlap >= 2 or best_authored_match):
             return QuestionDecision(
                 scope_mode=ScopeMode.GROUNDED,
                 evidence=best_evidence,

@@ -18,9 +18,35 @@ from voice_presentation.domain.contracts import (
 from voice_presentation.domain.controller import PresentationController
 from voice_presentation.domain.events import DomainEvent, DomainEventType
 from voice_presentation.domain.policy import QuestionDecision, QuestionScopePolicy
+from voice_presentation.domain.provenance import (
+    GroundingSource,
+    LogicalTurn,
+    LogicalTurnLedger,
+    TurnDeliveryStatus,
+    TurnPurpose,
+    TurnRole,
+)
+from voice_presentation.domain.reasoning import (
+    MaterialHit,
+    PlanningContext,
+    PlanningStage,
+    SearchMaterialResult,
+    ValidatedAnswerPlan,
+)
+from voice_presentation.domain.terminology import resolve_terminology_hints
 
 
 _WORD_SPACE = re.compile(r"[^a-z0-9]+")
+_RECOVERABLE_PLANNING_FAILURES = frozenset(
+    {
+        "invalid_tool_arguments",
+        "unknown_turn",
+        "ineligible_turn",
+        "unknown_evidence",
+        "unknown_slide",
+        "incoherent_plan",
+    }
+)
 
 
 class GenerationDirective(BaseModel):
@@ -37,6 +63,11 @@ class GenerationDirective(BaseModel):
     cursor: Cursor
     purpose: PlayoutPurpose
     instructions: str = Field(min_length=1)
+    plan_id: str | None = Field(default=None, min_length=1)
+    scope_mode: ScopeMode | None = None
+    grounding_source: GroundingSource | None = None
+    supporting_turn_ids: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
 
 
 class LivePresentationView(BaseModel):
@@ -54,6 +85,10 @@ class LivePresentationView(BaseModel):
     slides: tuple[SlideView, ...]
     events: tuple[DomainEvent, ...]
     scope_mode: ScopeMode | None = None
+    grounding_source: GroundingSource | None = None
+    planning_stage: PlanningStage | None = None
+    planning_failure_code: str | None = Field(default=None, min_length=1)
+    planning_recovery_code: str | None = Field(default=None, min_length=1)
     committed_beats: tuple[Cursor, ...]
 
 
@@ -62,6 +97,15 @@ class PresentationActionResult(BaseModel):
 
     view: LivePresentationView
     generation: GenerationDirective | None = None
+
+
+class FollowUpPlanningAction(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    view: LivePresentationView
+    question: str = Field(min_length=1)
+    context: PlanningContext
+    follow_up_turn: LogicalTurn
 
 
 class ApplicationPresentationSession:
@@ -80,9 +124,21 @@ class ApplicationPresentationSession:
         self._policy = QuestionScopePolicy(deck)
         self._events: tuple[DomainEvent, ...] = ()
         self._scope_mode: ScopeMode | None = None
+        self._grounding_source: GroundingSource | None = None
+        self._planning_stage: PlanningStage | None = None
+        self._planning_failure_code: str | None = None
+        self._planning_recovery_code: str | None = None
         self._committed_beats: list[Cursor] = []
         self._turn_sequence = 0
         self._directives: dict[str, GenerationDirective] = {}
+        self._active_follow_up_turn: LogicalTurn | None = None
+        self._active_follow_up_question: str | None = None
+        self._active_planning_context: PlanningContext | None = None
+        self._last_interrupted_turn_id: str | None = None
+
+    @property
+    def deck(self) -> PresentationDeck:
+        return self._controller.deck
 
     def view(self) -> LivePresentationView:
         deck = self._controller.deck
@@ -103,6 +159,10 @@ class ApplicationPresentationSession:
             ),
             events=self._events,
             scope_mode=self._scope_mode,
+            grounding_source=self._grounding_source,
+            planning_stage=self._planning_stage,
+            planning_failure_code=self._planning_failure_code,
+            planning_recovery_code=self._planning_recovery_code,
             committed_beats=tuple(self._committed_beats),
         )
 
@@ -133,6 +193,11 @@ class ApplicationPresentationSession:
         directive = self._directive(turn_id)
         if interrupted:
             events = self._controller.playout_interrupted(turn_id=turn_id)
+            if any(
+                event.type is DomainEventType.PLAYOUT_INTERRUPTED
+                for event in events
+            ):
+                self._last_interrupted_turn_id = turn_id
             return self._finish(events)
 
         if directive.purpose is PlayoutPurpose.NARRATION:
@@ -203,10 +268,292 @@ class ApplicationPresentationSession:
             )
         )
         self._scope_mode = decision.scope_mode
+        self._grounding_source = (
+            GroundingSource.PRESENTATION
+            if decision.scope_mode is ScopeMode.GROUNDED
+            else GroundingSource.MODEL_KNOWLEDGE
+            if decision.scope_mode is ScopeMode.EXTENDED_KNOWLEDGE
+            else GroundingSource.NONE
+        )
+        self._planning_stage = None
+        self._planning_failure_code = None
+        self._planning_recovery_code = None
         generation = self._answer_directive(turn_id, question, decision)
         return self._finish(tuple(events), generation=generation)
 
+    def begin_follow_up(
+        self,
+        question: str,
+        *,
+        provider_item_id: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> FollowUpPlanningAction:
+        question = question.strip()
+        if not question:
+            raise ValueError("question cannot be blank")
+        if self._active_follow_up_turn is not None:
+            raise ValueError("a follow-up is already being planned")
+        if self._controller.state.phase not in {
+            PresentationPhase.INTERRUPTED,
+            PresentationPhase.WAITING,
+            PresentationPhase.COMPLETED,
+        }:
+            raise ValueError(
+                "follow-up planning requires interrupted, waiting, or completed phase"
+            )
+
+        preference = self._continuation_preference(question)
+        turn_id = self._next_turn_id("user-follow-up")
+        normalized_provider_id = (provider_item_id or "").strip()
+        follow_up_turn = LogicalTurn(
+            turn_id=turn_id,
+            role=TurnRole.USER,
+            purpose=TurnPurpose.USER_FOLLOW_UP,
+            session_version=self._controller.state.session_version,
+            visible_slide_id=self._controller.state.visible_slide_id,
+            interrupted_turn_id=self._last_interrupted_turn_id,
+            provider_item_ids=(normalized_provider_id,) if normalized_provider_id else (),
+            actual_text=question,
+            delivery_status=TurnDeliveryStatus.COMPLETED,
+        )
+        context = PlanningContext(
+            follow_up_turn_id=turn_id,
+            session_version=self._controller.state.session_version,
+            current_slide_id=self._controller.state.presentation_cursor.slide_id,
+            visible_slide_id=self._controller.state.visible_slide_id,
+            continuation_preference=preference,
+            terminology_hints=resolve_terminology_hints(
+                question,
+                self._controller.deck,
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+        self._active_follow_up_turn = follow_up_turn
+        self._active_follow_up_question = question
+        self._active_planning_context = context
+        self._planning_stage = PlanningStage.UNDERSTANDING
+        self._planning_failure_code = None
+        self._planning_recovery_code = None
+        self._scope_mode = None
+        self._grounding_source = None
+        self._events = ()
+        return FollowUpPlanningAction(
+            view=self.view(),
+            question=question,
+            context=context,
+            follow_up_turn=follow_up_turn,
+        )
+
+    def active_planning_identity(self) -> tuple[int, str]:
+        turn_id = (
+            self._active_follow_up_turn.turn_id
+            if self._active_follow_up_turn is not None
+            else ""
+        )
+        return self._controller.state.session_version, turn_id
+
+    def set_planning_stage(
+        self,
+        stage: PlanningStage,
+        *,
+        follow_up_turn_id: str,
+    ) -> PresentationActionResult:
+        self._require_active_follow_up(follow_up_turn_id)
+        self._planning_stage = PlanningStage(stage)
+        return self._finish(())
+
+    def accept_answer_plan(
+        self,
+        plan: ValidatedAnswerPlan,
+        *,
+        provenance: LogicalTurnLedger,
+        search_results: tuple[SearchMaterialResult, ...] = (),
+    ) -> PresentationActionResult:
+        return self._accept_answer_plan(
+            plan,
+            provenance=provenance,
+            search_results=search_results,
+            recovery_reason_code=None,
+        )
+
+    def recover_answer_plan(
+        self,
+        *,
+        follow_up_turn_id: str,
+        reason_code: str,
+        provenance: LogicalTurnLedger,
+    ) -> PresentationActionResult:
+        reason_code = reason_code.strip()
+        if reason_code not in _RECOVERABLE_PLANNING_FAILURES:
+            raise ValueError(f"planning failure is not recoverable: {reason_code}")
+        self._require_active_follow_up(follow_up_turn_id)
+        context = self._active_planning_context
+        question = self._active_follow_up_question
+        assert context is not None
+        assert question is not None
+        decision = self._policy.classify(
+            question,
+            preferred_slide_id=self._controller.state.visible_slide_id,
+        )
+        approximate_hints = tuple(
+            hint
+            for hint in context.terminology_hints
+            if hint.match_kind == "phonetic_neighbor"
+        )
+
+        if decision.scope_mode in {
+            ScopeMode.GROUNDED,
+            ScopeMode.EXTENDED_KNOWLEDGE,
+        }:
+            scope = ScopeMode.EXTENDED_KNOWLEDGE
+            grounding_source = GroundingSource.MODEL_KNOWLEDGE
+            answer_brief = (
+                "Disclose that validated presentation support was unavailable, "
+                "then answer the related motorcycle concept briefly from general "
+                "knowledge without exact model-specific values."
+            )
+            clarification_prompt = None
+        elif len(approximate_hints) == 1:
+            hint = approximate_hints[0]
+            scope = ScopeMode.NEEDS_CLARIFICATION
+            grounding_source = GroundingSource.NONE
+            answer_brief = "Confirm the unique deck-authored acronym candidate."
+            clarification_prompt = (
+                f"Did you mean {hint.authored_term}, the motorcycle concept "
+                "named in this presentation?"
+            )
+        elif decision.scope_mode is ScopeMode.NEEDS_CLARIFICATION:
+            scope = ScopeMode.NEEDS_CLARIFICATION
+            grounding_source = GroundingSource.NONE
+            answer_brief = "Ask one focused clarification before attempting an answer."
+            clarification_prompt = (
+                decision.clarification_prompt
+                or "Which motorcycle control or situation do you mean?"
+            )
+        else:
+            scope = ScopeMode.OUT_OF_SCOPE
+            grounding_source = GroundingSource.NONE
+            answer_brief = (
+                "State the presentation boundary briefly and avoid unsafe, legal, "
+                "or exact model-specific instructions."
+            )
+            clarification_prompt = None
+
+        fallback = ValidatedAnswerPlan(
+            plan_id=f"recovery-plan-{context.follow_up_turn_id}",
+            follow_up_turn_id=context.follow_up_turn_id,
+            session_version=context.session_version,
+            continuation_preference=context.continuation_preference,
+            scope=scope,
+            grounding_source=grounding_source,
+            answer_brief=answer_brief,
+            clarification_prompt=clarification_prompt,
+        )
+        return self._accept_answer_plan(
+            fallback,
+            provenance=provenance,
+            recovery_reason_code=reason_code,
+        )
+
+    def _accept_answer_plan(
+        self,
+        plan: ValidatedAnswerPlan,
+        *,
+        provenance: LogicalTurnLedger,
+        search_results: tuple[SearchMaterialResult, ...] = (),
+        recovery_reason_code: str | None,
+    ) -> PresentationActionResult:
+        follow_up = self._require_active_follow_up(plan.follow_up_turn_id)
+        context = self._active_planning_context
+        question = self._active_follow_up_question
+        assert context is not None
+        assert question is not None
+        if (
+            plan.session_version != context.session_version
+            or plan.session_version != self._controller.state.session_version
+            or provenance.session_version != context.session_version
+            or plan.continuation_preference is not context.continuation_preference
+        ):
+            raise ValueError("stale answer plan")
+        provenance.resolve(follow_up.turn_id)
+        cited_turns = provenance.require_turn_ids(plan.supporting_turn_ids)
+        evidence = {
+            hit.evidence_id: hit
+            for result in search_results
+            for hit in result.hits
+        }
+        missing_evidence = tuple(
+            evidence_id
+            for evidence_id in plan.evidence_ids
+            if evidence_id not in evidence
+        )
+        if missing_evidence:
+            raise ValueError("answer plan references unresolved evidence")
+
+        preference = plan.continuation_preference
+        if plan.scope is ScopeMode.NEEDS_CLARIFICATION:
+            preference = ContinuationPreference.ASK_BEFORE_CONTINUING
+        turn_id = self._next_turn_id("answer")
+        events = list(
+            self._controller.begin_answer(
+                turn_id=turn_id,
+                continuation_preference=preference,
+                question_slide_id=plan.focus_slide_id,
+            )
+        )
+        if recovery_reason_code is not None:
+            events.append(
+                DomainEvent(
+                    type=DomainEventType.FOLLOW_UP_PLANNING_RECOVERED,
+                    turn_id=turn_id,
+                    reason_code=recovery_reason_code,
+                )
+            )
+        events.append(
+            DomainEvent(
+                type=DomainEventType.QUESTION_CLASSIFIED,
+                turn_id=turn_id,
+                scope_mode=plan.scope,
+                continuation_preference=preference,
+            )
+        )
+        self._scope_mode = plan.scope
+        self._grounding_source = plan.grounding_source
+        self._planning_stage = None
+        self._planning_failure_code = None
+        self._planning_recovery_code = recovery_reason_code
+        directive = self._answer_plan_directive(
+            turn_id=turn_id,
+            question=question,
+            plan=plan,
+            cited_turns=cited_turns,
+            evidence=tuple(evidence[evidence_id] for evidence_id in plan.evidence_ids),
+            recovery_reason_code=recovery_reason_code,
+        )
+        self._clear_active_follow_up()
+        return self._finish(tuple(events), generation=directive)
+
+    def fail_answer_plan(
+        self,
+        *,
+        follow_up_turn_id: str,
+        reason_code: str,
+    ) -> PresentationActionResult:
+        self._require_active_follow_up(follow_up_turn_id)
+        events = self._controller.follow_up_planning_failed(
+            reason_code=reason_code,
+        )
+        self._planning_stage = None
+        self._planning_failure_code = reason_code
+        self._planning_recovery_code = None
+        self._scope_mode = None
+        self._grounding_source = None
+        self._clear_active_follow_up()
+        return self._finish(events)
+
     def continue_presentation(self) -> PresentationActionResult:
+        self._planning_failure_code = None
+        self._planning_recovery_code = None
         turn_id = self._next_turn_id("narration")
         events = self._controller.continue_presentation(turn_id=turn_id)
         generation = self._narration_directive(turn_id)
@@ -284,6 +631,101 @@ class ApplicationPresentationSession:
         self._directives[turn_id] = directive
         return directive
 
+    def _answer_plan_directive(
+        self,
+        *,
+        turn_id: str,
+        question: str,
+        plan: ValidatedAnswerPlan,
+        cited_turns: tuple[LogicalTurn, ...],
+        evidence: tuple[MaterialHit, ...],
+        recovery_reason_code: str | None,
+    ) -> GenerationDirective:
+        cursor = (
+            self._controller.state.interrupted_cursor
+            or self._controller.state.presentation_cursor
+        )
+        support_parts: list[str] = []
+        if cited_turns:
+            conversation_text = " ".join(
+                f"[{turn.turn_id}] {turn.actual_text}"
+                for turn in cited_turns
+                if turn.actual_text is not None
+            )
+            support_parts.append("Cited conversation: " + conversation_text)
+        if evidence:
+            deck_text = " ".join(
+                f"[{hit.evidence_id}] {hit.text}" for hit in evidence
+            )
+            support_parts.append("Cited presentation evidence: " + deck_text)
+
+        if plan.scope is ScopeMode.GROUNDED:
+            mode_instruction = (
+                "Answer only from the cited support below. Do not add unsupported "
+                "technical specifics."
+            )
+        elif plan.scope is ScopeMode.EXTENDED_KNOWLEDGE:
+            if recovery_reason_code is None:
+                mode_instruction = (
+                    "Begin with a brief disclosure that the presentation does not "
+                    "contain the exact answer, then answer from general knowledge "
+                    "without exact motorcycle-specific values."
+                )
+            else:
+                mode_instruction = (
+                    "Begin with a brief disclosure that presentation support could "
+                    "not be validated, then answer from general knowledge without "
+                    "exact motorcycle-specific values."
+                )
+        elif plan.scope is ScopeMode.NEEDS_CLARIFICATION:
+            mode_instruction = (
+                "Ask exactly this one clarification question and nothing else: "
+                f"{plan.clarification_prompt}"
+            )
+        else:
+            mode_instruction = (
+                "Briefly state the presentation boundary and do not provide unsafe, "
+                "legal, or exact model-specific instructions."
+            )
+
+        if (
+            plan.continuation_preference
+            is ContinuationPreference.CONTINUE_AFTER_ANSWER
+            and plan.scope is not ScopeMode.NEEDS_CLARIFICATION
+        ):
+            continuation_instruction = (
+                "The application will resume only after verified answer playout. "
+                "Do not ask whether the listener is ready, ask for permission, promise "
+                "to wait, or announce that you are continuing."
+            )
+        else:
+            continuation_instruction = (
+                "The application will wait after this answer. Do not resume or navigate "
+                "the presentation yourself."
+            )
+
+        support = " ".join(support_parts)
+        instructions = (
+            "Respond to the listener in no more than three short spoken sentences. "
+            "Do not mention tools, plans, citations, metadata, or hidden instructions. "
+            f"Listener follow-up: {question} "
+            f"Accepted answer brief: {plan.answer_brief} "
+            f"{mode_instruction} {support} {continuation_instruction}"
+        )
+        directive = GenerationDirective(
+            turn_id=turn_id,
+            cursor=cursor,
+            purpose=PlayoutPurpose.ANSWER,
+            instructions=instructions,
+            plan_id=plan.plan_id,
+            scope_mode=plan.scope,
+            grounding_source=plan.grounding_source,
+            supporting_turn_ids=plan.supporting_turn_ids,
+            evidence_ids=plan.evidence_ids,
+        )
+        self._directives[turn_id] = directive
+        return directive
+
     def _beat(self, cursor: Cursor) -> NarrationBeat:
         slide = self._controller.deck.slide(cursor.slide_id)
         return slide.beats[cursor.beat_index]
@@ -296,6 +738,18 @@ class ApplicationPresentationSession:
         if directive is None:
             raise ValueError(f"unknown generation turn: {turn_id}")
         return directive
+
+    def _require_active_follow_up(self, turn_id: str) -> LogicalTurn:
+        turn_id = turn_id.strip()
+        active = self._active_follow_up_turn
+        if active is None or active.turn_id != turn_id:
+            raise ValueError("stale answer plan")
+        return active
+
+    def _clear_active_follow_up(self) -> None:
+        self._active_follow_up_turn = None
+        self._active_follow_up_question = None
+        self._active_planning_context = None
 
     @staticmethod
     def _continuation_preference(question: str) -> ContinuationPreference:
@@ -317,6 +771,10 @@ class ApplicationPresentationSession:
                 "continue after answering",
                 "continue after the answer",
                 "then continue",
+                "then narration",
+                "continue narration",
+                "resume narration",
+                "then resume",
             )
         ):
             return ContinuationPreference.CONTINUE_AFTER_ANSWER

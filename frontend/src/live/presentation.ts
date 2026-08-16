@@ -4,6 +4,7 @@ import type {
   PresentationSnapshot,
   SlideSummary,
 } from "./presentationTypes";
+import type { PlanningStage } from "./planningStatus";
 
 export const PRESENTATION_STATE_TOPIC = "voice-presentation.state.v1";
 export const PRESENTATION_COMMAND_TOPIC = "voice-presentation.command.v1";
@@ -16,6 +17,10 @@ export interface LivePresentationView {
   slides: SlideSummary[];
   events: DomainEventSnapshot[];
   scopeMode: string | null;
+  groundingSource: string | null;
+  planningStage: PlanningStage | null;
+  planningFailureCode: string | null;
+  planningRecoveryCode: string | null;
   committedBeats: Cursor[];
 }
 
@@ -46,6 +51,11 @@ export function parsePresentationStateUpdate(
       !isRecord(state.presentationCursor) ||
       !Array.isArray(value.view.slides) ||
       !Array.isArray(value.view.events) ||
+      !isNullableString(value.view.scopeMode) ||
+      !isNullableString(value.view.groundingSource) ||
+      !isPlanningStage(value.view.planningStage) ||
+      !isNullableString(value.view.planningFailureCode) ||
+      !isNullableString(value.view.planningRecoveryCode) ||
       !Array.isArray(value.view.committedBeats)
     ) {
       return null;
@@ -54,6 +64,19 @@ export function parsePresentationStateUpdate(
   } catch {
     return null;
   }
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isPlanningStage(value: unknown): value is PlanningStage | null {
+  return (
+    value === null ||
+    value === "understanding" ||
+    value === "searching" ||
+    value === "preparing"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
