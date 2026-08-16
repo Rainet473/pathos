@@ -20,6 +20,7 @@ export interface LivePresentationView {
   groundingSource: string | null;
   planningStage: PlanningStage | null;
   planningFailureCode: string | null;
+  planningRecoveryCode: string | null;
   committedBeats: Cursor[];
 }
 
@@ -54,6 +55,7 @@ export function parsePresentationStateUpdate(
       !isNullableString(value.view.groundingSource) ||
       !isPlanningStage(value.view.planningStage) ||
       !isNullableString(value.view.planningFailureCode) ||
+      !isNullableString(value.view.planningRecoveryCode) ||
       !Array.isArray(value.view.committedBeats)
     ) {
       return null;

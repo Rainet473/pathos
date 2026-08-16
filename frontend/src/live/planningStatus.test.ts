@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   planningFailureMessage,
+  planningRecoveryMessage,
   planningStatusDescription,
   planningStatusLabel,
 } from "./planningStatus";
@@ -35,5 +36,17 @@ describe("follow-up planning status", () => {
       "temporarily unavailable",
     );
     expect(planningFailureMessage("unknown_failure")).toContain("could not prepare");
+  });
+
+  it("explains that rejected support and focus were discarded before fallback", () => {
+    expect(planningRecoveryMessage("unknown_evidence")).toContain(
+      "presentation support could not be validated",
+    );
+    expect(planningRecoveryMessage("invalid_tool_arguments")).toContain(
+      "answer plan was incomplete",
+    );
+    expect(planningRecoveryMessage("unknown_evidence")).toContain(
+      "slide focus were discarded",
+    );
   });
 });

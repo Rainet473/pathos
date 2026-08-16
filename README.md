@@ -18,6 +18,12 @@ commit rules.
 - Six-slide visual deck with listener-controlled browsing.
 - Voice interruption without accidentally committing an unfinished beat.
 - Grounded, extended-knowledge, clarification, and out-of-scope answer modes.
+- Bounded silent follow-up planning with at most two deck searches and one
+  malformed-plan correction.
+- Disclosed citation-free fallback for safe recoverable plan-content failures;
+  timeout, provider, stale, cancellation, and disconnect failures stay closed.
+- Deck-authored acronym hints that preserve the authoritative transcript and ask
+  for clarification instead of silently rewriting uncertain terms.
 - Default wait after an answer, with explicit answer-and-continue permission.
 - Separate visible-slide and semantic presentation cursors.
 - Verified playout completion before a narration beat advances.
@@ -112,6 +118,18 @@ It compiles the Python package, runs all deterministic Python and frontend
 tests, checks installed Python dependencies, and builds the production web
 bundle. Paid external-provider observations remain opt-in and are not implied by
 an offline green gate.
+
+Summarize retained planning cache, search latency, endpointing, and answer-scoped
+pipeline timing with:
+
+```bash
+PYTHONPATH=backend/src python -m voice_presentation.transport.reasoning_evidence \
+  .runtime/conversation-diagnostics.jsonl --attempt-id <attempt-id>
+```
+
+The report uses provider-reported cache fields. Zero cached tokens is a valid
+measurement, and older records without a turn purpose remain explicitly
+unscoped.
 
 To isolate the LiveKit media path without invoking STT, LLM, or TTS models,
 export the `.env` values and run the small opt-in audio smoke:

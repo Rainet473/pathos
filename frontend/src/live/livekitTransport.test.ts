@@ -383,6 +383,7 @@ function presentationUpdate() {
       groundingSource: null,
       planningStage: null,
       planningFailureCode: null,
+      planningRecoveryCode: null,
       committedBeats: [],
     },
   };

@@ -117,6 +117,7 @@ class FollowUpPlanningSession:
             tool_steps=self._tool_steps,
             search_calls=self._search_calls,
             search_results=tuple(self._search_results),
+            terminology_hints=self._context.terminology_hints,
             accepted_plan=self._accepted_plan,
             rejection_code=self._rejection_code,
         )

@@ -31,3 +31,10 @@ export function planningFailureMessage(reasonCode: string): string {
   }
   return "The assistant could not prepare a validated answer. You can ask the follow-up again.";
 }
+
+export function planningRecoveryMessage(reasonCode: string): string {
+  if (reasonCode === "invalid_tool_arguments") {
+    return "The answer plan was incomplete, so its citations and slide focus were discarded before a safe fallback answer.";
+  }
+  return "The presentation support could not be validated, so its citations and slide focus were discarded before a safe fallback answer.";
+}

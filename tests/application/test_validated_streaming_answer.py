@@ -347,6 +347,227 @@ def test_stale_plan_and_planning_failure_never_create_answer_generation():
     assert recovered.generation is not None
 
 
+def test_recoverable_plan_failure_creates_one_disclosed_citation_free_answer():
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        "Does engine braking damage the clutch? Then continue.",
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+    original_cursor = request.view.state.presentation_cursor
+    original_visible_slide = request.view.state.visible_slide_id
+
+    recovered = session.recover_answer_plan(
+        follow_up_turn_id=request.context.follow_up_turn_id,
+        reason_code="unknown_evidence",
+        provenance=ledger,
+    )
+
+    directive = recovered.generation
+    assert directive is not None
+    assert directive.plan_id == (
+        f"recovery-plan-{request.context.follow_up_turn_id}"
+    )
+    assert directive.scope_mode is ScopeMode.EXTENDED_KNOWLEDGE
+    assert directive.grounding_source is GroundingSource.MODEL_KNOWLEDGE
+    assert directive.supporting_turn_ids == ()
+    assert directive.evidence_ids == ()
+    assert "presentation support could not be validated" in directive.instructions
+    assert "presentation does not contain the exact answer" not in directive.instructions
+    assert "Does engine braking damage the clutch?" in directive.instructions
+    assert recovered.view.planning_recovery_code == "unknown_evidence"
+    assert recovered.view.planning_failure_code is None
+    assert recovered.view.state.presentation_cursor == original_cursor
+    assert recovered.view.state.visible_slide_id == original_visible_slide
+    assert [event.type for event in recovered.view.events] == [
+        DomainEventType.FOLLOW_UP_PLANNING_RECOVERED,
+        DomainEventType.QUESTION_CLASSIFIED,
+    ]
+
+    session.playout_started(turn_id=directive.turn_id)
+    resumed = session.playout_finished(turn_id=directive.turn_id, interrupted=False)
+
+    assert resumed.view.state.phase is PresentationPhase.PRESENTING
+    assert resumed.generation is not None
+    assert resumed.generation.cursor == original_cursor
+    assert resumed.view.committed_beats == ()
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_scope", "expected_text"),
+    [
+        (
+            "Why does it jerk? Then continue.",
+            ScopeMode.NEEDS_CLARIFICATION,
+            "Which motorcycle control or situation do you mean?",
+        ),
+        (
+            "What exact torque should I use for my axle nut? Then continue.",
+            ScopeMode.OUT_OF_SCOPE,
+            "presentation boundary",
+        ),
+    ],
+)
+def test_recovered_answer_preserves_clarification_and_safety_boundaries(
+    question,
+    expected_scope,
+    expected_text,
+):
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        question,
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+
+    recovered = session.recover_answer_plan(
+        follow_up_turn_id=request.context.follow_up_turn_id,
+        reason_code="invalid_tool_arguments",
+        provenance=ledger,
+    )
+
+    directive = recovered.generation
+    assert directive is not None
+    assert directive.scope_mode is expected_scope
+    assert directive.supporting_turn_ids == ()
+    assert directive.evidence_ids == ()
+    assert expected_text in directive.instructions
+    assert recovered.view.state.visible_slide_id == "control-loop"
+
+    session.playout_started(turn_id=directive.turn_id)
+    settled = session.playout_finished(turn_id=directive.turn_id, interrupted=False)
+    if expected_scope is ScopeMode.NEEDS_CLARIFICATION:
+        assert settled.view.state.phase is PresentationPhase.WAITING
+        assert settled.generation is None
+    else:
+        assert settled.view.state.phase is PresentationPhase.PRESENTING
+        assert settled.generation is not None
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "timeout",
+        "provider_error",
+        "stale_context",
+        "stale_session",
+        "stale_follow_up",
+        "cancelled",
+        "missing_tool_call",
+        "multiple_tool_calls",
+        "unknown_tool",
+    ],
+)
+def test_nonrecoverable_planning_failures_cannot_create_fallback_speech(reason_code):
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        "Does engine braking damage the clutch?",
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+
+    with pytest.raises(ValueError, match="not recoverable"):
+        session.recover_answer_plan(
+            follow_up_turn_id=request.context.follow_up_turn_id,
+            reason_code=reason_code,
+            provenance=ledger,
+        )
+
+    assert session.view().state.phase is PresentationPhase.INTERRUPTED
+    assert session.view().state.active_turn_id is None
+    assert session.view().planning_recovery_code is None
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_hints"),
+    [
+        (
+            "Explain ABS, then continue.",
+            [("ABS", "ABS", "exact")],
+        ),
+        (
+            "Explain A B S, then continue.",
+            [("A B S", "ABS", "spaced")],
+        ),
+        (
+            "Explain APS, then continue.",
+            [("APS", "ABS", "phonetic_neighbor")],
+        ),
+        ("Explain AWS, then continue.", []),
+    ],
+)
+def test_acronym_hints_are_authored_bounded_and_preserve_transcript(
+    question,
+    expected_hints,
+):
+    session, _ = _interrupted_session()
+
+    request = session.begin_follow_up(
+        question,
+        provider_item_id="provider-user-follow-up",
+    )
+
+    assert request.follow_up_turn.actual_text == question
+    assert [
+        (hint.observed_text, hint.authored_term, hint.match_kind)
+        for hint in request.context.terminology_hints
+    ] == expected_hints
+
+
+def test_approximate_acronym_recovery_clarifies_instead_of_silently_rewriting():
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        "Explain APS, then continue.",
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+
+    recovered = session.recover_answer_plan(
+        follow_up_turn_id=request.context.follow_up_turn_id,
+        reason_code="unknown_evidence",
+        provenance=ledger,
+    )
+
+    directive = recovered.generation
+    assert directive is not None
+    assert directive.scope_mode is ScopeMode.NEEDS_CLARIFICATION
+    assert "Did you mean ABS" in directive.instructions
+    assert "Explain APS" in directive.instructions
+    session.playout_started(turn_id=directive.turn_id)
+    settled = session.playout_finished(turn_id=directive.turn_id, interrupted=False)
+    assert settled.view.state.phase is PresentationPhase.WAITING
+    assert settled.generation is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Explain ABS, then continue.",
+        "Explain A B S, then continue.",
+    ],
+)
+def test_exact_authored_acronym_can_use_disclosed_citation_free_recovery(question):
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        question,
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+
+    recovered = session.recover_answer_plan(
+        follow_up_turn_id=request.context.follow_up_turn_id,
+        reason_code="invalid_tool_arguments",
+        provenance=ledger,
+    )
+
+    directive = recovered.generation
+    assert directive is not None
+    assert directive.scope_mode is ScopeMode.EXTENDED_KNOWLEDGE
+    assert directive.grounding_source is GroundingSource.MODEL_KNOWLEDGE
+    assert directive.evidence_ids == ()
+    assert directive.supporting_turn_ids == ()
+
+
 def test_then_narration_is_explicit_application_owned_continuation():
     session, _ = _interrupted_session()
 

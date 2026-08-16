@@ -168,8 +168,14 @@ class ConversationDiagnostics:
         return self._record(metric_type, elapsed_ms, fields)
 
     def record_turn_metrics(
-        self, metrics: Mapping[str, object]
+        self,
+        metrics: Mapping[str, object],
+        *,
+        turn_id: str | None = None,
+        turn_purpose: str | None = None,
     ) -> ConversationDiagnosticEvent:
+        if (turn_id is None) is not (turn_purpose is None):
+            raise ValueError("turn identity and purpose must be supplied together")
         elapsed_ms = self._elapsed_ms()
         field_names = {
             "end_of_turn_delay": "endOfUtteranceDelayMs",
@@ -182,6 +188,11 @@ class ConversationDiagnostics:
             value = metrics.get(source_name)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 fields[wire_name] = _milliseconds(value)
+        if turn_id is not None and turn_purpose is not None:
+            if not turn_id.strip() or not turn_purpose.strip():
+                raise ValueError("turn identity and purpose cannot be blank")
+            fields["turnId"] = turn_id.strip()
+            fields["turnPurpose"] = turn_purpose.strip()
         return self._record("turn_metrics", elapsed_ms, fields)
 
     def record_follow_up_planning(

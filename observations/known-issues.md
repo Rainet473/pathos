@@ -120,7 +120,8 @@ but must remain visible during later breadth and release work.
 
 ## KI-007 — Spoken acronyms can be transcribed as nearby letter sequences
 
-- **Status:** deferred to reasoning robustness and phrase-variation evaluation.
+- **Status:** mitigated with bounded authored-term hints; raw planner quality
+  limitation retained.
 - **Observed:** 17 August 2026, attempt
   `3536b0b3-9285-4934-9290-9c60342a7c30`.
 - **Behavior:** the first spoken `ABS` request arrived as `APS`. The planner
@@ -131,25 +132,33 @@ but must remain visible during later breadth and release work.
   authoritative STT text changes a short acronym.
 - **Constraint:** do not silently rewrite arbitrary acronyms. Any correction must
   be deck-bounded, observable, and preserve the original transcript.
-- **Later acceptance case:** evaluate `ABS`, `A B S`, and nearby letter errors;
-  either resolve against a unique authored deck term or ask one clarification.
+- **Mitigation:** exact `ABS` and spaced `A B S` resolve against the authored ABS
+  term. `APS` records one phonetic-neighbor hint without changing the transcript;
+  if planning still fails, the application asks “Did you mean ABS?” and waits.
+  Unrelated `AWS` is not rewritten.
+- **Remaining limitation:** in the bounded live planner probe, Gemma searched the
+  correct `ABS` candidate but then cited the active user turn. Validation rejected
+  the plan and the clarification fallback remained safe; direct acceptance still
+  depends on provider plan quality.
 
 ## KI-008 — Recoverable planner validation failures can produce no spoken answer
 
-- **Status:** deferred to the robustness slice; desired production behavior is
-  now explicit.
+- **Status:** mitigated offline and wired into the production bridge; a forced
+  live fallback observation remains optional.
 - **Observed:** 17 August 2026, attempts
   `f15cc0d8-9222-441f-a91c-74217dbcacd5` and
   `3536b0b3-9285-4934-9290-9c60342a7c30`.
 - **Behavior:** unknown citations or malformed terminal arguments can exhaust the
   bounded planner and leave only a visible failure, even when a useful answer
   could still be delivered safely.
-- **Desired behavior:** first attempt bounded correction. If support still cannot
-  be validated, discard citations and focus navigation, then deliver a disclosed
-  model-knowledge or boundary response when the request is safe and answerable.
+- **Implemented behavior:** first attempt bounded correction. If support still
+  cannot be validated, discard citations and focus navigation, then deliver a
+  disclosed model-knowledge or boundary response when the request is safe and
+  answerable.
 - **Constraint:** graceful degradation must create a newly valid application-owned
   directive; it must never speak an invalid plan, preserve unsupported focus, or
   bypass clarification and safety boundaries.
-- **Later acceptance case:** citation and schema failures each produce at most one
-  safe spoken fallback, retain default/explicit continuation semantics, and never
-  mutate the semantic cursor.
+- **Verified:** citation and schema failures each produce at most one new
+  application-owned fallback, retain default/explicit continuation semantics,
+  and never mutate the semantic cursor. Timeout, provider, stale, cancellation,
+  disconnect, unknown-tool, and multiple-tool failures remain fail-closed.

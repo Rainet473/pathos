@@ -46,13 +46,14 @@ from voice_presentation.transport.context_trace import (
 )
 
 
-SILENT_PLANNER_INSTRUCTIONS = """You are the silent planning phase for an application-controlled presentation. Never answer the listener in prose. Every response must contain exactly one native function call and no more than one. Supply every tool field, using empty arrays or null where appropriate. If the listener asks what wording in a retained prior turn means, submit a grounded conversation plan immediately and cite that antecedent turn; do not search for wording already present in conversation. Use search_material only when the retained conversation does not contain enough support. Never repeat the same search. After zero to two searches, terminate with submit_answer_plan. Cite only logical turn IDs from the immediately preceding developer Turn reference annotations and only evidence IDs returned by search_material in the current planning turn or supplied in the current application snapshot. Earlier tool outputs are audit history; re-run a current search before citing any evidence ID shown only in that history. Keep scope separate from grounding source. A conversation reference uses grounded plus conversation; deck material uses grounded plus presentation; mixed support uses conversation_and_presentation; related knowledge absent from the deck uses extended_knowledge plus model_knowledge; ambiguity uses needs_clarification plus none; unsupported requests use out_of_scope plus none. If focusSlideId is non-null, the identical slide ID must also appear in supportingSlideIds; use null when no visual focus is needed. The answer brief is concise factual guidance, not a scripted answer or hidden reasoning. The application alone owns navigation, continuation, speech, and state. Never include continuation permission in a plan."""
+SILENT_PLANNER_INSTRUCTIONS = """You are the silent planning phase for an application-controlled presentation. Never answer the listener in prose. Every response must contain exactly one native function call and no more than one. Supply every tool field, using empty arrays or null where appropriate. If the listener asks what wording in a retained prior turn means, submit a grounded conversation plan immediately and cite that antecedent turn; do not search for wording already present in conversation. Use search_material only when the retained conversation does not contain enough support. Never repeat the same search. After zero to two searches, terminate with submit_answer_plan. Cite only eligible earlier logical turn IDs from the immediately preceding developer Turn reference annotations and only evidence IDs returned by search_material in the current planning turn or supplied in the current application snapshot. Never cite activeFollowUpTurnId; it is the request being planned, not supporting evidence. needs_clarification and out_of_scope use empty supportingTurnIds. Earlier tool outputs are audit history; re-run a current search before citing any evidence ID shown only in that history. Keep scope separate from grounding source. A conversation reference uses grounded plus conversation; deck material uses grounded plus presentation; mixed support uses conversation_and_presentation; related knowledge absent from the deck uses extended_knowledge plus model_knowledge; ambiguity uses needs_clarification plus none; unsupported requests use out_of_scope plus none. If focusSlideId is non-null, the identical slide ID must also appear in supportingSlideIds; use null when no visual focus is needed. The answer brief is concise factual guidance, not a scripted answer or hidden reasoning. The application alone owns navigation, continuation, speech, and state. Never include continuation permission in a plan."""
 
 MAX_PROVIDER_REQUESTS = 3
 DEFAULT_MAX_COMPLETION_TOKENS = 512
 
 
 class PlannerFailureCode(StrEnum):
+    CANCELLED = "cancelled"
     STALE_CONTEXT = "stale_context"
     MISSING_TOOL_CALL = "missing_tool_call"
     MULTIPLE_TOOL_CALLS = "multiple_tool_calls"
@@ -112,6 +113,10 @@ class SilentPlanningRun(ReasoningModel):
             "planId": plan.plan_id if plan is not None else None,
             "supportingTurnIds": list(plan.supporting_turn_ids) if plan else [],
             "evidenceIds": list(plan.evidence_ids) if plan else [],
+            "terminologyHints": [
+                hint.model_dump(mode="json", by_alias=True)
+                for hint in self.snapshot.terminology_hints
+            ],
             "requestCount": len(self.requests),
             "toolSequence": [
                 entry.name
@@ -385,6 +390,41 @@ class LiveKitSilentPlanner:
                         parsed = SubmitAnswerPlanInput.model_validate(raw_arguments)
                 except json.JSONDecodeError:
                     invalid_detail = "json_decode"
+                    if (
+                        schema_corrections == 0
+                        and sequence < MAX_PROVIDER_REQUESTS
+                    ):
+                        schema_corrections += 1
+                        forced_tool_name = tool_call.name
+                        correction_output = {
+                            "accepted": False,
+                            "reasonCode": invalid_detail,
+                            "applicationInstruction": (
+                                "Correct the tool arguments once using valid JSON "
+                                "and this schema."
+                            ),
+                        }
+                        chat_context.insert(
+                            (
+                                llm.FunctionCall(
+                                    call_id=tool_call.call_id,
+                                    name=tool_call.name,
+                                    arguments=tool_call.arguments,
+                                    extra=tool_call.extra or {},
+                                ),
+                                llm.FunctionCallOutput(
+                                    call_id=tool_call.call_id,
+                                    name=tool_call.name,
+                                    output=json.dumps(
+                                        correction_output,
+                                        separators=(",", ":"),
+                                        sort_keys=True,
+                                    ),
+                                    is_error=True,
+                                ),
+                            )
+                        )
+                        continue
                     session.cancel(PlanningRejectionCode.CANCELLED)
                     return self._finish(
                         case_name=case_name,
@@ -656,6 +696,13 @@ class LiveKitSilentPlanner:
             )
         except asyncio.CancelledError:
             session.cancel(PlanningRejectionCode.CANCELLED)
+            self._finish(
+                case_name=case_name,
+                session=session,
+                requests=requests,
+                trace=trace,
+                failure_code=PlannerFailureCode.CANCELLED,
+            )
             raise
         except PlanningProtocolError:
             return self._finish(
@@ -875,6 +922,13 @@ def _application_snapshot_text(
         evidence = " | ".join(
             f"{hit.evidence_id}: {hit.text}" for hit in context.current_slide_evidence
         )
+    terminology_hints = "none"
+    if context.terminology_hints:
+        terminology_hints = " | ".join(
+            f"observed={hint.observed_text},authored={hint.authored_term},"
+            f"match={hint.match_kind}"
+            for hint in context.terminology_hints
+        )
     return (
         "Authoritative application planning snapshot: "
         f"sessionVersion={context.session_version}; "
@@ -884,7 +938,12 @@ def _application_snapshot_text(
         f"currentSlideTitle={current_slide.title}; "
         f"currentSlideHeadline={current_slide.headline}; "
         f"availableSlides=[{slides}]; "
-        f"currentSlideEvidence=[{evidence}]. "
+        f"currentSlideEvidence=[{evidence}]; "
+        f"terminologyHints=[{terminology_hints}]. "
+        "A terminology hint is only a deck-authored candidate intent; preserve "
+        "the listener transcript. For a phonetic_neighbor, use the authored term "
+        "rather than the observed text in search, then ground the candidate with "
+        "current evidence or ask for clarification. "
         "Continuation permission is application-owned and is not a plan field."
     )
 

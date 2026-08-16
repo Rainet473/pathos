@@ -10,6 +10,7 @@ import type { LiveSessionEndReason } from "./lifecycle";
 import { adjacentSlideId } from "./slideNavigation";
 import {
   planningFailureMessage,
+  planningRecoveryMessage,
   planningStatusDescription,
   planningStatusLabel,
 } from "./planningStatus";
@@ -275,6 +276,11 @@ export default function LiveConversationApp() {
           {snapshot.planningFailureCode ? (
             <p className="failure">
               {planningFailureMessage(snapshot.planningFailureCode)}
+            </p>
+          ) : null}
+          {snapshot.planningRecoveryCode ? (
+            <p className="scope-mode">
+              {planningRecoveryMessage(snapshot.planningRecoveryCode)}
             </p>
           ) : null}
           <div className="actions presentation-actions">

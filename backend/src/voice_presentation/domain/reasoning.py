@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -29,6 +29,12 @@ class ReasoningModel(BaseModel):
         extra="forbid",
         frozen=True,
     )
+
+
+class TerminologyHint(ReasoningModel):
+    observed_text: NonBlankString
+    authored_term: NonBlankString
+    match_kind: Literal["exact", "spaced", "phonetic_neighbor"]
 
 
 class SearchMaterialInput(ReasoningModel):
@@ -188,6 +194,7 @@ class PlanningContext(ReasoningModel):
     visible_slide_id: NonBlankString
     continuation_preference: ContinuationPreference
     current_slide_evidence: tuple[MaterialHit, ...] = Field(default=(), max_length=5)
+    terminology_hints: tuple[TerminologyHint, ...] = Field(default=(), max_length=4)
     timeout_seconds: float = Field(default=30.0, gt=0, le=60)
 
     @model_validator(mode="after")
@@ -246,5 +253,6 @@ class PlanningSnapshot(ReasoningModel):
     tool_steps: int = Field(ge=0)
     search_calls: int = Field(ge=0)
     search_results: tuple[SearchMaterialResult, ...] = ()
+    terminology_hints: tuple[TerminologyHint, ...] = ()
     accepted_plan: ValidatedAnswerPlan | None = None
     rejection_code: PlanningRejectionCode | None = None

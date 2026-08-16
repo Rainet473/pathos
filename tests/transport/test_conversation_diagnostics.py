@@ -292,6 +292,28 @@ def test_follow_up_planning_duration_is_separate_from_answer_streaming_metrics()
     assert answer_tts.fields["ttsTtfbMs"] == 180
 
 
+def test_pipeline_turn_metrics_can_be_attributed_to_application_turn_purpose():
+    from voice_presentation.transport.diagnostics import ConversationDiagnostics
+
+    diagnostics = ConversationDiagnostics(
+        attempt_id="9ea3a1cb-56ea-44d3-b322-d9d3134ce0db",
+        clock=SequenceClock(10.0),
+    )
+
+    answer = diagnostics.record_turn_metrics(
+        {"llm_node_ttft": 0.42, "tts_node_ttfb": 0.18},
+        turn_id="answer-3",
+        turn_purpose="answer",
+    )
+
+    assert answer.fields == {
+        "llmTtftMs": 420,
+        "ttsTtfbMs": 180,
+        "turnId": "answer-3",
+        "turnPurpose": "answer",
+    }
+
+
 def test_jsonl_diagnostic_ledger_is_append_only_and_attempt_scoped(tmp_path):
     from voice_presentation.transport.diagnostics import (
         ConversationDiagnosticEvent,

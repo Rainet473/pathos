@@ -255,6 +255,7 @@ function presentationUpdate(sessionVersion: number) {
       groundingSource: null,
       planningStage: null,
       planningFailureCode: null,
+      planningRecoveryCode: null,
       committedBeats: [],
     },
   };

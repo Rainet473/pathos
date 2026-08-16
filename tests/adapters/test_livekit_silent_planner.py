@@ -10,7 +10,12 @@ from livekit.agents import llm
 from voice_presentation.adapters.livekit.silent_planner import (
     LiveKitSilentPlanner,
     PlannerFailureCode,
+    SILENT_PLANNER_INSTRUCTIONS,
+    _application_snapshot_text,
     build_planning_tools,
+)
+from voice_presentation.application.live_presentation import (
+    ApplicationPresentationSession,
 )
 from voice_presentation.application.follow_up_planning import RecordedPlanningSuite
 from voice_presentation.content.repository import JsonMaterialRepository
@@ -85,6 +90,46 @@ class FakeLLM:
 
     async def aclose(self):
         self.closed = True
+
+
+class BlockingLLM:
+    model = "google/gemma-4-31b-it"
+    provider = "livekit"
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    def chat(self, **kwargs):
+        del kwargs
+        entered = self.entered
+
+        class BlockingStream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                del exc_type, exc, traceback
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                entered.set()
+                await asyncio.Event().wait()
+                raise StopAsyncIteration
+
+        return BlockingStream()
+
+    async def aclose(self):
+        return None
+
+
+class RecordingPlanningLedger:
+    def __init__(self) -> None:
+        self.records = []
+
+    def record(self, run) -> None:
+        self.records.append(run)
 
 
 def _deck():
@@ -223,6 +268,33 @@ def test_planning_tools_expose_only_bounded_camel_case_slice_two_schemas():
     assert "answerBrief" in submit["properties"]
     assert "continuationPreference" not in submit["properties"]
     assert set(submit["required"]) == set(submit["properties"])
+
+
+def test_planner_snapshot_exposes_bounded_acronym_hint_without_rewriting_question():
+    session = ApplicationPresentationSession(_deck(), session_id="acronym-hint")
+    narration = session.start().generation
+    assert narration is not None
+    session.playout_started(turn_id=narration.turn_id)
+    session.playout_finished(turn_id=narration.turn_id, interrupted=True)
+    request = session.begin_follow_up("Explain APS, then continue.")
+
+    snapshot_text = _application_snapshot_text(
+        context=request.context,
+        deck=_deck(),
+    )
+
+    assert request.follow_up_turn.actual_text == "Explain APS, then continue."
+    assert "observed=APS" in snapshot_text
+    assert "authored=ABS" in snapshot_text
+    assert "match=phonetic_neighbor" in snapshot_text
+    assert "candidate intent" in snapshot_text
+    assert "use the authored term rather than the observed text in search" in (
+        snapshot_text
+    )
+    assert "Never cite activeFollowUpTurnId" in SILENT_PLANNER_INSTRUCTIONS
+    assert "needs_clarification and out_of_scope use empty supportingTurnIds" in (
+        SILENT_PLANNER_INSTRUCTIONS
+    )
 
 
 def test_conversation_reference_uses_one_native_terminal_call_and_discards_text():
@@ -442,15 +514,6 @@ def test_search_tool_is_removed_after_the_second_allowed_search():
             ),
             PlannerFailureCode.UNKNOWN_TOOL,
         ),
-        (
-            _response(
-                "malformed",
-                tool_calls=(
-                    _tool_call("search_material", "{not-json", call_id="one"),
-                ),
-            ),
-            PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
-        ),
     ],
 )
 def test_provider_protocol_bypass_attempts_fail_closed(response, failure_code):
@@ -470,8 +533,103 @@ def test_provider_protocol_bypass_attempts_fail_closed(response, failure_code):
     assert run.snapshot.accepted_plan is None
     assert run.failure_code is failure_code
     assert run.speech_requested is False
-    if failure_code is PlannerFailureCode.INVALID_TOOL_ARGUMENTS:
-        assert run.failure_detail == "json_decode"
+
+
+def test_one_malformed_json_tool_call_can_self_correct_once():
+    case = _case("conversation-citation")
+    corrected = case.actions[0].input.model_dump(mode="json", by_alias=True)
+    model = FakeLLM(
+        [
+            _response(
+                "malformed",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        "{not-json",
+                        call_id="malformed",
+                    ),
+                ),
+            ),
+            _response(
+                "corrected",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        corrected,
+                        call_id="corrected",
+                    ),
+                ),
+            ),
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+
+    run = asyncio.run(
+        planner.plan(
+            case_name="malformed-json-correction",
+            snapshot=_snapshot_through(case.context.follow_up_turn_id),
+            context=case.context,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.ACCEPTED
+    assert run.failure_code is None
+    assert len(run.requests) == 2
+    correction_context = model.calls[1]["provider_messages"]
+    assert [message["role"] for message in correction_context[-2:]] == [
+        "assistant",
+        "tool",
+    ]
+    correction = json.loads(correction_context[-1]["content"])
+    assert correction == {
+        "accepted": False,
+        "applicationInstruction": (
+            "Correct the tool arguments once using valid JSON and this schema."
+        ),
+        "reasonCode": "json_decode",
+    }
+
+
+def test_repeated_malformed_json_stops_after_one_correction():
+    case = _case("conversation-citation")
+    model = FakeLLM(
+        [
+            _response(
+                "malformed-one",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        "{not-json",
+                        call_id="malformed-one",
+                    ),
+                ),
+            ),
+            _response(
+                "malformed-two",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        "{still-not-json",
+                        call_id="malformed-two",
+                    ),
+                ),
+            ),
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+
+    run = asyncio.run(
+        planner.plan(
+            case_name="malformed-json-exhausted",
+            snapshot=_snapshot_through(case.context.follow_up_turn_id),
+            context=case.context,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.CANCELLED
+    assert run.failure_code is PlannerFailureCode.INVALID_TOOL_ARGUMENTS
+    assert run.failure_detail == "json_decode"
+    assert len(run.requests) == 2
 
 
 def test_valid_but_untrusted_terminal_arguments_are_rejected_by_application():
@@ -724,3 +882,35 @@ def test_provider_exception_is_sanitized_and_does_not_escape_to_answering():
     assert run.failure_detail == "RuntimeError"
     assert "private provider detail" not in run.to_json()
     assert run.snapshot.accepted_plan is None
+
+
+def test_cancellation_during_terminal_provider_request_is_recorded_and_reraised():
+    async def scenario() -> None:
+        case = _case("conversation-citation")
+        model = BlockingLLM()
+        ledger = RecordingPlanningLedger()
+        planner = LiveKitSilentPlanner(
+            deck=_deck(),
+            model_client=model,
+            ledger=ledger,
+        )
+        task = asyncio.create_task(
+            planner.plan(
+                case_name="cancelled-terminal",
+                snapshot=_snapshot_through(case.context.follow_up_turn_id),
+                context=case.context,
+            )
+        )
+        await asyncio.wait_for(model.entered.wait(), timeout=0.1)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert len(ledger.records) == 1
+        run = ledger.records[0]
+        assert run.snapshot.status is PlanningStatus.CANCELLED
+        assert run.snapshot.accepted_plan is None
+        assert run.failure_code is PlannerFailureCode.CANCELLED
+
+    asyncio.run(scenario())
