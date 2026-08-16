@@ -15,7 +15,7 @@ def test_livekit_token_is_short_lived_and_room_scoped():
         api_secret="development-secret-that-is-long-enough",
     )
     encoded = issuer.issue_join_token(
-        room_name="probe-9ea3a1cb",
+        room_name="conversation-9ea3a1cb",
         identity="browser-9ea3a1cb",
         can_publish=True,
         can_subscribe=True,
@@ -29,7 +29,7 @@ def test_livekit_token_is_short_lived_and_room_scoped():
     assert claims["sub"] == "browser-9ea3a1cb"
     assert claims["video"] == {
         "roomJoin": True,
-        "room": "probe-9ea3a1cb",
+        "room": "conversation-9ea3a1cb",
         "canPublish": True,
         "canSubscribe": True,
         "canPublishData": True,

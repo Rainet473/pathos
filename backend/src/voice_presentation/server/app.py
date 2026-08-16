@@ -8,22 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse
 
-from voice_presentation.application.fake_session import FakeSessionView
-from voice_presentation.application.fake_sessions import (
-    FakeActionRequest,
-    FakeSessionNotFound,
-    FakeSessionStore,
-)
-from voice_presentation.content.repository import (
-    DeckPackageRepository,
-    JsonMaterialRepository,
-)
-from voice_presentation.domain.controller import TransitionRejected
-from voice_presentation.transport.bootstrap import (
-    ProbeBootstrapService,
-    ProbeSessionRequest,
-    ProbeSessionResponse,
-)
+from voice_presentation.content.repository import DeckPackageRepository
 from voice_presentation.transport.conversation import (
     ConversationBootstrapService,
     ConversationService,
@@ -43,9 +28,7 @@ APPLICATION_PRESENTATION_INSTRUCTIONS = (
 
 
 def create_app(
-    bootstrap_service: ProbeBootstrapService | None = None,
     *,
-    fake_session_store: FakeSessionStore | None = None,
     conversation_service: ConversationService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
@@ -53,8 +36,6 @@ def create_app(
         try:
             yield
         finally:
-            if bootstrap_service is not None:
-                await bootstrap_service.aclose()
             if conversation_service is not None:
                 await conversation_service.aclose()
 
@@ -79,25 +60,6 @@ def create_app(
             ) from None
         return FileResponse(path, media_type="image/png")
 
-    if bootstrap_service is not None:
-
-        @app.post(
-            "/api/probe/sessions",
-            response_model=ProbeSessionResponse,
-            status_code=status.HTTP_201_CREATED,
-        )
-        async def create_probe_session(
-            request: ProbeSessionRequest,
-        ) -> ProbeSessionResponse:
-            try:
-                return await bootstrap_service.create_session(request)
-            except Exception as error:
-                logger.exception("Could not start LiveKit transport probe", exc_info=error)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="voice transport is unavailable",
-                ) from error
-
     if conversation_service is not None:
 
         @app.post(
@@ -115,36 +77,6 @@ def create_app(
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="live voice provider is unavailable",
-                ) from error
-
-    if fake_session_store is not None:
-
-        @app.post(
-            "/api/fake/sessions",
-            response_model=FakeSessionView,
-            status_code=status.HTTP_201_CREATED,
-        )
-        async def create_fake_session() -> FakeSessionView:
-            return await fake_session_store.create()
-
-        @app.post(
-            "/api/fake/sessions/{session_id}/actions",
-            response_model=FakeSessionView,
-        )
-        async def apply_fake_action(
-            session_id: str, action: FakeActionRequest
-        ) -> FakeSessionView:
-            try:
-                return await fake_session_store.act(session_id, action)
-            except FakeSessionNotFound as error:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="offline presentation session not found",
-                ) from error
-            except (TransitionRejected, RuntimeError) as error:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=str(error),
                 ) from error
 
     return app
@@ -244,14 +176,6 @@ def create_configured_app() -> FastAPI:
     return create_app(conversation_service=conversation_service)
 
 
-def create_offline_app() -> FastAPI:
-    return create_app(fake_session_store=_slice_two_fake_store())
-
-
-def _slice_two_fake_store() -> FakeSessionStore:
-    return FakeSessionStore(_slice_two_deck())
-
-
 def _live_presentation_session(session_id: str):
     from voice_presentation.application.live_presentation import (
         ApplicationPresentationSession,
@@ -268,13 +192,6 @@ def _full_deck():
 
 def _asset_root() -> Path:
     return Path(__file__).resolve().parents[4] / "assets"
-
-
-def _slice_two_deck():
-    repository_root = Path(__file__).resolve().parents[4]
-    return JsonMaterialRepository(
-        repository_root / "content" / "slice-two.json"
-    ).load()
 
 
 def _selected_voice_provider_name() -> str:

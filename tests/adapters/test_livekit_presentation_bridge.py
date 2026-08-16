@@ -26,7 +26,9 @@ from voice_presentation.voice.sessions import (
 pytestmark = pytest.mark.offline
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SLICE_TWO_DECK = REPOSITORY_ROOT / "content" / "slice-two.json"
+ONE_SLIDE_FIXTURE = (
+    REPOSITORY_ROOT / "tests" / "fixtures" / "one-slide-presentation.json"
+)
 BACKEND = VoiceBackendIdentity(
     provider=VoiceProvider.LIVEKIT_INFERENCE_PIPELINE,
     kind=VoiceBackendKind.PIPELINE,
@@ -169,7 +171,7 @@ def _spec():
 
 
 def _application_session() -> ApplicationPresentationSession:
-    deck = JsonMaterialRepository(SLICE_TWO_DECK).load()
+    deck = JsonMaterialRepository(ONE_SLIDE_FIXTURE).load()
     return ApplicationPresentationSession(deck, session_id=_spec().attempt_id)
 
 

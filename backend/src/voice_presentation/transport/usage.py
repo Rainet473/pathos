@@ -183,7 +183,7 @@ def _validated_minutes(row: dict[str, object]) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Summarize local LiveKit probe usage")
+    parser = argparse.ArgumentParser(description="Summarize local LiveKit session usage")
     parser.add_argument("path", nargs="?", default=".runtime/livekit-usage.jsonl")
     parser.add_argument("--allowance", type=int, required=True)
     parser.add_argument("--prior-usage", type=int, default=0)

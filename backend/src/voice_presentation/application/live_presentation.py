@@ -5,7 +5,7 @@ import re
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from voice_presentation.application.fake_session import SlideView
+from voice_presentation.application.views import SlideView
 from voice_presentation.domain.content import NarrationBeat, PresentationDeck
 from voice_presentation.domain.contracts import (
     ContinuationPreference,

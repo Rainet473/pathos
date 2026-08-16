@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from voice_presentation.content.repository import DeckPackageRepository
-from voice_presentation.server.app import create_offline_app
+from voice_presentation.server.app import create_app
 
 
 pytestmark = pytest.mark.offline
@@ -42,8 +42,8 @@ def test_unknown_slide_render_is_rejected_before_resolving_a_path():
         repository.render_path("../secret")
 
 
-def test_offline_app_serves_a_packaged_slide_render():
-    client = TestClient(create_offline_app())
+def test_application_serves_a_packaged_slide_render_without_a_live_session():
+    client = TestClient(create_app())
 
     response = client.get(
         "/api/decks/motorcycle-controls/slides/control-loop/render"

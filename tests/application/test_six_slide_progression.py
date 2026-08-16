@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from voice_presentation.application.fake_session import FakePresentationSession
 from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
 )
@@ -52,19 +51,6 @@ def test_live_application_automatically_selects_all_24_narration_beats():
         "rev-matching",
         "braking-abs",
     ]
-
-
-def test_fake_application_automatically_plays_all_24_narration_beats():
-    session = FakePresentationSession(_deck(), session_id="six-slide-fake")
-    view = session.start()
-
-    while view.state.phase is PresentationPhase.PRESENTING:
-        assert view.state.active_playout is not None
-        view = session.complete_active_playout()
-
-    assert view.state.phase is PresentationPhase.COMPLETED
-    assert len(view.committed_beats) == 24
-    assert len({cursor for cursor in view.committed_beats}) == 24
 
 
 def test_duplicate_completion_cannot_select_a_second_successor_turn():

@@ -1,1 +1,1 @@
-"""Provider-independent contracts for realtime transport probes."""
+"""Provider-independent contracts for live conversation transport."""

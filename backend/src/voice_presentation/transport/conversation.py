@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from voice_presentation.transport.bootstrap import JoinTokenIssuer
+from voice_presentation.transport.auth import JoinTokenIssuer
 from voice_presentation.voice.sessions import VoiceBackendIdentity
 
 DEFAULT_CONVERSATION_IDLE_TIMEOUT_SECONDS = 120

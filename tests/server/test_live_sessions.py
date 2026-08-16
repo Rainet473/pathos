@@ -105,7 +105,7 @@ def test_live_bootstrap_launches_selected_backend_and_returns_browser_credential
     ("field", "value"),
     [
         ("attempt_id", "not-a-uuid"),
-        ("room_name", "probe-9ea3a1cb"),
+        ("room_name", "audio-smoke-9ea3a1cb"),
         ("room_name", "conversation-different"),
         ("participant_identity", "voice-worker-9ea3a1cb"),
         ("participant_identity", "browser-different"),

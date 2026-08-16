@@ -19,11 +19,13 @@ from voice_presentation.domain.events import DomainEventType
 pytestmark = pytest.mark.offline
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SLICE_TWO_DECK = REPOSITORY_ROOT / "content" / "slice-two.json"
+ONE_SLIDE_FIXTURE = (
+    REPOSITORY_ROOT / "tests" / "fixtures" / "one-slide-presentation.json"
+)
 
 
 def new_session() -> ApplicationPresentationSession:
-    deck = JsonMaterialRepository(SLICE_TWO_DECK).load()
+    deck = JsonMaterialRepository(ONE_SLIDE_FIXTURE).load()
     return ApplicationPresentationSession(deck, session_id="live-session")
 
 
@@ -143,6 +145,57 @@ def test_explicit_continue_from_waiting_replays_the_saved_beat():
     assert resumed.view.state.presentation_cursor == saved_cursor
     assert resumed.generation is not None
     assert resumed.generation.cursor == saved_cursor
+
+
+def test_clarification_stays_waiting_even_when_question_requests_continuation():
+    session = new_session()
+    narration = session.start().generation
+    assert narration is not None
+    session.playout_started(turn_id=narration.turn_id)
+    session.playout_finished(turn_id=narration.turn_id, interrupted=True)
+
+    answer = session.prepare_question(
+        "Why does it jerk? Continue after answering."
+    )
+
+    assert answer.view.state.continuation_preference is (
+        ContinuationPreference.ASK_BEFORE_CONTINUING
+    )
+    assert answer.generation is not None
+    session.playout_started(turn_id=answer.generation.turn_id)
+    waiting = session.playout_finished(
+        turn_id=answer.generation.turn_id,
+        interrupted=False,
+    )
+    assert waiting.view.state.phase is PresentationPhase.WAITING
+    assert waiting.generation is None
+
+
+def test_fresh_live_sessions_produce_the_same_directive_and_transition_shape():
+    results = []
+    for session_id in ("repeat-a", "repeat-b"):
+        session = ApplicationPresentationSession(
+            JsonMaterialRepository(ONE_SLIDE_FIXTURE).load(),
+            session_id=session_id,
+        )
+        narration = session.start().generation
+        assert narration is not None
+        session.playout_started(turn_id=narration.turn_id)
+        session.playout_finished(turn_id=narration.turn_id, interrupted=True)
+        results.append(
+            session.prepare_question(
+                "Why does engine braking feel stronger in a low gear?"
+            )
+        )
+
+    assert results[0].generation is not None
+    assert results[1].generation is not None
+    assert results[0].generation.instructions == results[1].generation.instructions
+    assert results[0].view.state.phase == results[1].view.state.phase
+    assert (
+        results[0].view.state.presentation_cursor
+        == results[1].view.state.presentation_cursor
+    )
 
 
 def test_late_completion_for_an_interrupted_turn_is_stale_and_cannot_commit():
