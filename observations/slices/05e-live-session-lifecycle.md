@@ -35,6 +35,20 @@ values or reclassifying an unexpected provider failure as a graceful end.
 - Python lint/format command was unavailable because Ruff is not installed in
   the configured environment; the complete Python test gate passed.
 
+## LiveKit option-shape hotfix
+
+- User-observed failure: the installed SDK rejected boolean
+  `preemptive_generation=False` because `TurnHandlingOptions` requires an options
+  mapping.
+- Initial regression: the focused factory test failed on the boolean/mapping
+  mismatch.
+- Fix: pass `{"enabled": false}` and construct the installed `AgentSession` in a
+  deterministic adapter-conformance test.
+- Focused result: 13 passed.
+- Full backend result after hotfix: 182 passed; 1 paid LiveKit test skipped.
+- Browser observation: not run because the explicitly requested in-app Browser
+  surface was unavailable; no alternate browser was substituted.
+
 ## Human observation
 
 - Attempt ID: pending.

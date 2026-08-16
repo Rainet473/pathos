@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 import pytest
@@ -226,7 +227,7 @@ def test_livekit_inference_factory_uses_documented_three_model_starter():
         {
             "turn_detection": "stt",
             "endpointing": {"min_delay": 1.2, "max_delay": 3.0},
-            "preemptive_generation": False,
+            "preemptive_generation": {"enabled": False},
         }
     ]
     assert session_constructor.calls == [
@@ -240,6 +241,26 @@ def test_livekit_inference_factory_uses_documented_three_model_starter():
     ]
     assert "private-livekit-key" not in repr(factory)
     assert "private-livekit-secret" not in repr(factory)
+
+
+def test_livekit_pipeline_turn_options_are_accepted_by_installed_agent_session():
+    async def scenario() -> None:
+        factory = LiveKitInferencePipelineFactory(
+            api_key="private-livekit-key",
+            api_secret="private-livekit-secret",
+            stt_constructor=RecordingConstructor(object()),
+            llm_constructor=RecordingConstructor(object()),
+            tts_constructor=RecordingConstructor(object()),
+        )
+
+        session = factory.build_session(instructions=INSTRUCTIONS)
+
+        assert (
+            session.options.turn_handling["preemptive_generation"]["enabled"]
+            is False
+        )
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(

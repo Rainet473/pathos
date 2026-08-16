@@ -50,8 +50,10 @@ unexpected room/provider loss -----------------------> failure
 - Unexpected worker departure, room loss, or provider error remains a failure.
 - Browser and Python worker release microphone, audio elements, AgentSession, and
   room resources once for every terminal path.
-- Application-controlled turn preparation does not use speculative preemptive
-  generation because it mutates the turn context after endpointing.
+- Application-controlled turn preparation supplies LiveKit's structured
+  `{"enabled": false}` preemptive-generation option because it mutates the turn
+  context after endpointing. A boolean is not a valid `TurnHandlingOptions`
+  value in the installed LiveKit Agents SDK.
 - Per-turn timing is read from supported conversation-item metrics; the deprecated
   `metrics_collected` event is not registered.
 
