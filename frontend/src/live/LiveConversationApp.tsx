@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef } from "react";
 
-import type { PresentationPhase } from "../presentation/state";
+import type { PresentationPhase } from "./presentationTypes";
 import { createLiveSession } from "./api";
 import { DeckSlideVisual } from "./deckSlideVisual";
 import { LiveKitConversationTransport } from "./livekitTransport";
@@ -142,8 +142,8 @@ export default function LiveConversationApp() {
   const snapshot = state.presentation;
   if (snapshot === null) {
     return (
-      <main className="probe-shell live-shell">
-        <section className="probe-card live-card" aria-live="polite">
+      <main className="session-shell live-shell">
+        <section className="session-card live-card" aria-live="polite">
           <p className="eyebrow">Interruptible voice presentation</p>
           <h1>Live voice presentation</h1>
           <p className="lede">

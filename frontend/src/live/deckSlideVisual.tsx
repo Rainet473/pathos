@@ -1,7 +1,7 @@
 import { useState } from "react";
 
-import type { SlideSummary } from "../presentation/state";
-import { SlideVisual } from "../presentation/slideVisuals";
+import type { SlideSummary } from "./presentationTypes";
+import { SlideVisual } from "./slideVisuals";
 
 export function deckSlideRenderUrl(deckId: string, slideId: string): string {
   return `/api/decks/${encodeURIComponent(deckId)}/slides/${encodeURIComponent(slideId)}/render`;

@@ -3,7 +3,7 @@ import type {
   DomainEventSnapshot,
   PresentationSnapshot,
   SlideSummary,
-} from "../presentation/state";
+} from "./presentationTypes";
 
 export const PRESENTATION_STATE_TOPIC = "voice-presentation.state.v1";
 export const PRESENTATION_COMMAND_TOPIC = "voice-presentation.command.v1";
