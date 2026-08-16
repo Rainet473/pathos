@@ -25,7 +25,15 @@ describe("follow-up planning status", () => {
 
   it("turns sanitized failure codes into retryable listener guidance", () => {
     expect(planningFailureMessage("timeout")).toContain("timed out");
-    expect(planningFailureMessage("provider_error")).toContain("could not prepare");
+    expect(planningFailureMessage("unknown_evidence")).toContain(
+      "presentation support changed",
+    );
+    expect(planningFailureMessage("invalid_tool_arguments")).toContain(
+      "finish or rephrase",
+    );
+    expect(planningFailureMessage("provider_error")).toContain(
+      "temporarily unavailable",
+    );
     expect(planningFailureMessage("unknown_failure")).toContain("could not prepare");
   });
 });

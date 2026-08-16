@@ -46,7 +46,7 @@ from voice_presentation.transport.context_trace import (
 )
 
 
-SILENT_PLANNER_INSTRUCTIONS = """You are the silent planning phase for an application-controlled presentation. Never answer the listener in prose. Every response must contain exactly one native function call and no more than one. Supply every tool field, using empty arrays or null where appropriate. If the listener asks what wording in a retained prior turn means, submit a grounded conversation plan immediately and cite that antecedent turn; do not search for wording already present in conversation. Use search_material only when the retained conversation does not contain enough support. Never repeat the same search. After zero to two searches, terminate with submit_answer_plan. Cite only logical turn IDs from the immediately preceding developer Turn reference annotations and only evidence IDs returned by search_material or supplied in the application snapshot. Keep scope separate from grounding source. A conversation reference uses grounded plus conversation; deck material uses grounded plus presentation; mixed support uses conversation_and_presentation; related knowledge absent from the deck uses extended_knowledge plus model_knowledge; ambiguity uses needs_clarification plus none; unsupported requests use out_of_scope plus none. If focusSlideId is non-null, the identical slide ID must also appear in supportingSlideIds; use null when no visual focus is needed. The answer brief is concise factual guidance, not a scripted answer or hidden reasoning. The application alone owns navigation, continuation, speech, and state. Never include continuation permission in a plan."""
+SILENT_PLANNER_INSTRUCTIONS = """You are the silent planning phase for an application-controlled presentation. Never answer the listener in prose. Every response must contain exactly one native function call and no more than one. Supply every tool field, using empty arrays or null where appropriate. If the listener asks what wording in a retained prior turn means, submit a grounded conversation plan immediately and cite that antecedent turn; do not search for wording already present in conversation. Use search_material only when the retained conversation does not contain enough support. Never repeat the same search. After zero to two searches, terminate with submit_answer_plan. Cite only logical turn IDs from the immediately preceding developer Turn reference annotations and only evidence IDs returned by search_material in the current planning turn or supplied in the current application snapshot. Earlier tool outputs are audit history; re-run a current search before citing any evidence ID shown only in that history. Keep scope separate from grounding source. A conversation reference uses grounded plus conversation; deck material uses grounded plus presentation; mixed support uses conversation_and_presentation; related knowledge absent from the deck uses extended_knowledge plus model_knowledge; ambiguity uses needs_clarification plus none; unsupported requests use out_of_scope plus none. If focusSlideId is non-null, the identical slide ID must also appear in supportingSlideIds; use null when no visual focus is needed. The answer brief is concise factual guidance, not a scripted answer or hidden reasoning. The application alone owns navigation, continuation, speech, and state. Never include continuation permission in a plan."""
 
 MAX_PROVIDER_REQUESTS = 3
 DEFAULT_MAX_COMPLETION_TOKENS = 512
@@ -170,6 +170,7 @@ class PlanningModelClient(Protocol):
 class _CollectedProviderResponse(ReasoningModel):
     evidence: PlannerRequestEvidence
     tool_calls: tuple[llm.FunctionToolCall, ...]
+    received_at: float
 
 
 def build_planning_tools() -> tuple[llm.RawFunctionTool, llm.RawFunctionTool]:
@@ -266,17 +267,22 @@ class LiveKitSilentPlanner:
         active_identity: Callable[[], tuple[int, str]] | None = None,
         on_stage: Callable[[PlanningStage], Awaitable[None]] | None = None,
     ) -> SilentPlanningRun:
+        started_at = self._clock()
+        deadline = started_at + context.timeout_seconds
         session = FollowUpPlanningSession(
             deck=self._deck,
             provenance=snapshot.ledger,
             context=context,
             search=MaterialSearch(self._deck),
+            clock=self._clock,
+            started_at=started_at,
             active_identity=active_identity,
         )
         requests: list[PlannerRequestEvidence] = []
         trace: list[PlanningTraceEntry] = []
         schema_corrections = 0
         forced_tool_name: str | None = None
+        historical_evidence_ids = _historical_evidence_ids(snapshot)
 
         if not _snapshot_ends_at_follow_up(snapshot, context.follow_up_turn_id):
             session.cancel(PlanningRejectionCode.CANCELLED)
@@ -294,289 +300,351 @@ class LiveKitSilentPlanner:
             deck=self._deck,
         )
         try:
-            async with asyncio.timeout(context.timeout_seconds):
-                if on_stage is not None:
-                    await on_stage(PlanningStage.UNDERSTANDING)
-                for sequence in range(1, MAX_PROVIDER_REQUESTS + 1):
-                    search_available = (
-                        session.snapshot.search_calls < MAX_SEARCH_CALLS
+            if on_stage is not None:
+                await on_stage(PlanningStage.UNDERSTANDING)
+            for sequence in range(1, MAX_PROVIDER_REQUESTS + 1):
+                remaining_seconds = deadline - self._clock()
+                if remaining_seconds <= 0:
+                    raise TimeoutError
+                search_available = (
+                    session.snapshot.search_calls < MAX_SEARCH_CALLS
+                )
+                if forced_tool_name is not None:
+                    request_tools = tuple(
+                        tool
+                        for tool in self._tools
+                        if tool.info.name == forced_tool_name
                     )
-                    if forced_tool_name is not None:
-                        request_tools = tuple(
-                            tool
-                            for tool in self._tools
-                            if tool.info.name == forced_tool_name
-                        )
-                        tool_choice: object = {
+                    tool_choice: object = {
+                        "type": "function",
+                        "function": {"name": forced_tool_name},
+                    }
+                    forced_tool_name = None
+                else:
+                    request_tools = (
+                        self._tools if search_available else (self._tools[1],)
+                    )
+                    tool_choice = (
+                        "required"
+                        if search_available
+                        else {
                             "type": "function",
-                            "function": {"name": forced_tool_name},
+                            "function": {"name": "submit_answer_plan"},
                         }
-                        forced_tool_name = None
-                    else:
-                        request_tools = (
-                            self._tools if search_available else (self._tools[1],)
-                        )
-                        tool_choice = (
-                            "required"
-                            if search_available
-                            else {
-                                "type": "function",
-                                "function": {"name": "submit_answer_plan"},
-                            }
-                        )
+                    )
+                async with asyncio.timeout(remaining_seconds):
                     response = await self._request(
                         sequence=sequence,
                         chat_context=chat_context,
-                        timeout_seconds=context.timeout_seconds,
+                        timeout_seconds=remaining_seconds,
                         tools=request_tools,
                         tool_choice=tool_choice,
                     )
-                    requests.append(response.evidence)
-                    if not response.tool_calls:
-                        session.cancel(PlanningRejectionCode.CANCELLED)
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                            failure_code=PlannerFailureCode.MISSING_TOOL_CALL,
-                        )
-                    if len(response.tool_calls) != 1:
-                        session.cancel(PlanningRejectionCode.CANCELLED)
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                            failure_code=PlannerFailureCode.MULTIPLE_TOOL_CALLS,
-                        )
-
-                    tool_call = response.tool_calls[0]
-                    if tool_call.name not in {
-                        "search_material",
-                        "submit_answer_plan",
-                    }:
-                        session.cancel(PlanningRejectionCode.CANCELLED)
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                            failure_code=PlannerFailureCode.UNKNOWN_TOOL,
-                        )
-                    invalid_detail: str | None = None
-                    try:
-                        raw_arguments = json.loads(tool_call.arguments)
-                        if not isinstance(raw_arguments, dict):
-                            invalid_detail = "not_object"
-                            raise ValueError
-                        if tool_call.name == "search_material":
-                            parsed = SearchMaterialInput.model_validate(raw_arguments)
-                        else:
-                            parsed = SubmitAnswerPlanInput.model_validate(raw_arguments)
-                    except json.JSONDecodeError:
-                        invalid_detail = "json_decode"
-                        session.cancel(PlanningRejectionCode.CANCELLED)
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                            failure_code=PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
-                            failure_detail=invalid_detail,
-                        )
-                    except ValidationError as error:
-                        invalid_detail = _sanitized_validation_detail(error)
-                        if (
-                            schema_corrections == 0
-                            and sequence < MAX_PROVIDER_REQUESTS
-                        ):
-                            schema_corrections += 1
-                            forced_tool_name = tool_call.name
-                            correction_output = {
-                                "accepted": False,
-                                "reasonCode": invalid_detail,
-                                "applicationInstruction": (
-                                    "Correct the tool arguments once using this "
-                                    "validation result."
-                                ),
-                            }
-                            chat_context.insert(
-                                (
-                                    llm.FunctionCall(
-                                        call_id=tool_call.call_id,
-                                        name=tool_call.name,
-                                        arguments=json.dumps(
-                                            raw_arguments,
-                                            separators=(",", ":"),
-                                            sort_keys=True,
-                                        ),
-                                        extra=tool_call.extra or {},
-                                    ),
-                                    llm.FunctionCallOutput(
-                                        call_id=tool_call.call_id,
-                                        name=tool_call.name,
-                                        output=json.dumps(
-                                            correction_output,
-                                            separators=(",", ":"),
-                                            sort_keys=True,
-                                        ),
-                                        is_error=True,
-                                    ),
-                                )
-                            )
-                            continue
-                        session.cancel(PlanningRejectionCode.CANCELLED)
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                            failure_code=PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
-                            failure_detail=invalid_detail,
-                        )
-                    except ValueError:
-                        session.cancel(PlanningRejectionCode.CANCELLED)
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                            failure_code=PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
-                            failure_detail=invalid_detail or "value_error",
-                        )
-
-                    call_trace = FunctionCallTrace(
-                        call_id=tool_call.call_id,
-                        name=tool_call.name,
-                        arguments=parsed.model_dump(mode="json", by_alias=True),
+                requests.append(response.evidence)
+                if not response.tool_calls:
+                    session.cancel(PlanningRejectionCode.CANCELLED)
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                        failure_code=PlannerFailureCode.MISSING_TOOL_CALL,
                     )
-                    trace.append(call_trace)
-                    try:
-                        if isinstance(parsed, SearchMaterialInput):
-                            if on_stage is not None:
-                                await on_stage(PlanningStage.SEARCHING)
-                            result = session.search(
-                                parsed,
-                                session_version=context.session_version,
-                                follow_up_turn_id=context.follow_up_turn_id,
-                            )
-                            output = result.model_dump(mode="json", by_alias=True)
-                            remaining_search_calls = (
-                                MAX_SEARCH_CALLS - session.snapshot.search_calls
-                            )
-                            provider_output = {
-                                **output,
-                                "remainingSearchCalls": remaining_search_calls,
-                                "applicationInstruction": (
-                                    "Search succeeded. Do not repeat this query. "
-                                    "Call submit_answer_plan now if these hits are "
-                                    "sufficient; only a materially different query "
-                                    "may use the remaining search allowance."
-                                    if remaining_search_calls
-                                    else "Search succeeded. Do not repeat this query. "
-                                    "The search allowance is exhausted; call "
-                                    "submit_answer_plan now."
-                                ),
-                            }
-                            trace.append(
-                                FunctionResultTrace(
+                if len(response.tool_calls) != 1:
+                    session.cancel(PlanningRejectionCode.CANCELLED)
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                        failure_code=PlannerFailureCode.MULTIPLE_TOOL_CALLS,
+                    )
+
+                tool_call = response.tool_calls[0]
+                if tool_call.name not in {
+                    "search_material",
+                    "submit_answer_plan",
+                }:
+                    session.cancel(PlanningRejectionCode.CANCELLED)
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                        failure_code=PlannerFailureCode.UNKNOWN_TOOL,
+                    )
+                invalid_detail: str | None = None
+                try:
+                    raw_arguments = json.loads(tool_call.arguments)
+                    if not isinstance(raw_arguments, dict):
+                        invalid_detail = "not_object"
+                        raise ValueError
+                    if tool_call.name == "search_material":
+                        parsed = SearchMaterialInput.model_validate(raw_arguments)
+                    else:
+                        parsed = SubmitAnswerPlanInput.model_validate(raw_arguments)
+                except json.JSONDecodeError:
+                    invalid_detail = "json_decode"
+                    session.cancel(PlanningRejectionCode.CANCELLED)
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                        failure_code=PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
+                        failure_detail=invalid_detail,
+                    )
+                except ValidationError as error:
+                    invalid_detail = _sanitized_validation_detail(error)
+                    if (
+                        schema_corrections == 0
+                        and sequence < MAX_PROVIDER_REQUESTS
+                    ):
+                        schema_corrections += 1
+                        forced_tool_name = tool_call.name
+                        correction_output = {
+                            "accepted": False,
+                            "reasonCode": invalid_detail,
+                            "applicationInstruction": (
+                                "Correct the tool arguments once using this "
+                                "validation result."
+                            ),
+                        }
+                        chat_context.insert(
+                            (
+                                llm.FunctionCall(
                                     call_id=tool_call.call_id,
                                     name=tool_call.name,
-                                    output=provider_output,
-                                    is_error=False,
-                                )
-                            )
-                            chat_context.insert(
-                                (
-                                    llm.FunctionCall(
-                                        call_id=tool_call.call_id,
-                                        name=tool_call.name,
-                                        arguments=call_trace.arguments_json(),
-                                        extra=tool_call.extra or {},
+                                    arguments=json.dumps(
+                                        raw_arguments,
+                                        separators=(",", ":"),
+                                        sort_keys=True,
                                     ),
-                                    llm.FunctionCallOutput(
-                                        call_id=tool_call.call_id,
-                                        name=tool_call.name,
-                                        output=json.dumps(
-                                            provider_output,
-                                            separators=(",", ":"),
-                                            sort_keys=True,
-                                        ),
-                                        is_error=False,
+                                    extra=tool_call.extra or {},
+                                ),
+                                llm.FunctionCallOutput(
+                                    call_id=tool_call.call_id,
+                                    name=tool_call.name,
+                                    output=json.dumps(
+                                        correction_output,
+                                        separators=(",", ":"),
+                                        sort_keys=True,
                                     ),
-                                )
+                                    is_error=True,
+                                ),
                             )
-                            continue
+                        )
+                        continue
+                    session.cancel(PlanningRejectionCode.CANCELLED)
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                        failure_code=PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
+                        failure_detail=invalid_detail,
+                    )
+                except ValueError:
+                    session.cancel(PlanningRejectionCode.CANCELLED)
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                        failure_code=PlannerFailureCode.INVALID_TOOL_ARGUMENTS,
+                        failure_detail=invalid_detail or "value_error",
+                    )
 
+                call_trace = FunctionCallTrace(
+                    call_id=tool_call.call_id,
+                    name=tool_call.name,
+                    arguments=parsed.model_dump(mode="json", by_alias=True),
+                )
+                trace.append(call_trace)
+                try:
+                    if isinstance(parsed, SearchMaterialInput):
                         if on_stage is not None:
-                            await on_stage(PlanningStage.PREPARING)
-                        plan = session.submit(
+                            await on_stage(PlanningStage.SEARCHING)
+                        result = session.search(
                             parsed,
                             session_version=context.session_version,
                             follow_up_turn_id=context.follow_up_turn_id,
                         )
-                        trace.extend(
+                        output = result.model_dump(mode="json", by_alias=True)
+                        remaining_search_calls = (
+                            MAX_SEARCH_CALLS - session.snapshot.search_calls
+                        )
+                        can_search_again = bool(remaining_search_calls) and (
+                            sequence + 1 < MAX_PROVIDER_REQUESTS
+                        )
+                        if not can_search_again:
+                            forced_tool_name = "submit_answer_plan"
+                        provider_output = {
+                            **output,
+                            "remainingSearchCalls": (
+                                remaining_search_calls if can_search_again else 0
+                            ),
+                            "applicationInstruction": (
+                                "Search succeeded. Do not repeat this query. "
+                                "Call submit_answer_plan now if these hits are "
+                                "sufficient; only a materially different query "
+                                "may use the remaining search allowance."
+                                if can_search_again
+                                else "Search succeeded. Do not repeat this query. "
+                                "The search allowance is exhausted; call "
+                                "submit_answer_plan now."
+                            ),
+                        }
+                        trace.append(
+                            FunctionResultTrace(
+                                call_id=tool_call.call_id,
+                                name=tool_call.name,
+                                output=provider_output,
+                                is_error=False,
+                            )
+                        )
+                        chat_context.insert(
                             (
-                                FunctionResultTrace(
+                                llm.FunctionCall(
                                     call_id=tool_call.call_id,
                                     name=tool_call.name,
-                                    output={
-                                        "accepted": True,
-                                        "planId": plan.plan_id,
-                                    },
+                                    arguments=call_trace.arguments_json(),
+                                    extra=tool_call.extra or {},
+                                ),
+                                llm.FunctionCallOutput(
+                                    call_id=tool_call.call_id,
+                                    name=tool_call.name,
+                                    output=json.dumps(
+                                        provider_output,
+                                        separators=(",", ":"),
+                                        sort_keys=True,
+                                    ),
                                     is_error=False,
                                 ),
-                                ApplicationDecisionTrace(
-                                    decision_id=f"decision-{case_name}",
-                                    source_call_id=tool_call.call_id,
-                                    plan_id=plan.plan_id,
-                                    accepted=True,
-                                    reason_code="accepted",
-                                    supporting_turn_ids=plan.supporting_turn_ids,
-                                ),
                             )
                         )
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
+                        continue
+
+                    if on_stage is not None:
+                        await on_stage(PlanningStage.PREPARING)
+                    plan = session.submit(
+                        parsed,
+                        session_version=context.session_version,
+                        follow_up_turn_id=context.follow_up_turn_id,
+                        received_at=response.received_at,
+                    )
+                    trace.extend(
+                        (
+                            FunctionResultTrace(
+                                call_id=tool_call.call_id,
+                                name=tool_call.name,
+                                output={
+                                    "accepted": True,
+                                    "planId": plan.plan_id,
+                                },
+                                is_error=False,
+                            ),
+                            ApplicationDecisionTrace(
+                                decision_id=f"decision-{case_name}",
+                                source_call_id=tool_call.call_id,
+                                plan_id=plan.plan_id,
+                                accepted=True,
+                                reason_code="accepted",
+                                supporting_turn_ids=plan.supporting_turn_ids,
+                            ),
                         )
-                    except PlanningProtocolError as error:
-                        trace.extend(
+                    )
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                    )
+                except PlanningProtocolError as error:
+                    rejection_output = {
+                        "accepted": False,
+                        "reasonCode": error.code.value,
+                    }
+                    trace.extend(
+                        (
+                            FunctionResultTrace(
+                                call_id=tool_call.call_id,
+                                name=tool_call.name,
+                                output=rejection_output,
+                                is_error=True,
+                            ),
+                            ApplicationDecisionTrace(
+                                decision_id=f"decision-{case_name}",
+                                source_call_id=tool_call.call_id,
+                                plan_id=f"rejected-plan-{case_name}",
+                                accepted=False,
+                                reason_code=error.code.value,
+                                supporting_turn_ids=(
+                                    parsed.supporting_turn_ids
+                                    if isinstance(parsed, SubmitAnswerPlanInput)
+                                    else ()
+                                ),
+                            ),
+                        )
+                    )
+                    cited_historical_evidence = (
+                        isinstance(parsed, SubmitAnswerPlanInput)
+                        and bool(parsed.evidence_ids)
+                        and set(parsed.evidence_ids) <= historical_evidence_ids
+                    )
+                    can_recover_historical_evidence = (
+                        error.code is PlanningRejectionCode.UNKNOWN_EVIDENCE
+                        and cited_historical_evidence
+                        and session.snapshot.search_calls == 0
+                        and sequence + 2 <= MAX_PROVIDER_REQUESTS
+                    )
+                    if can_recover_historical_evidence:
+                        rejection_output = {
+                            **rejection_output,
+                            "applicationInstruction": (
+                                "Those evidence IDs are historical and are not "
+                                "valid in the current planning turn. Call "
+                                "search_material now, then submit one corrected "
+                                "answer plan using only current search evidence."
+                            ),
+                        }
+                        trace[-2] = FunctionResultTrace(
+                            call_id=tool_call.call_id,
+                            name=tool_call.name,
+                            output=rejection_output,
+                            is_error=True,
+                        )
+                        chat_context.insert(
                             (
-                                FunctionResultTrace(
+                                llm.FunctionCall(
                                     call_id=tool_call.call_id,
                                     name=tool_call.name,
-                                    output={
-                                        "accepted": False,
-                                        "reasonCode": error.code.value,
-                                    },
-                                    is_error=True,
+                                    arguments=call_trace.arguments_json(),
+                                    extra=tool_call.extra or {},
                                 ),
-                                ApplicationDecisionTrace(
-                                    decision_id=f"decision-{case_name}",
-                                    source_call_id=tool_call.call_id,
-                                    plan_id=f"rejected-plan-{case_name}",
-                                    accepted=False,
-                                    reason_code=error.code.value,
-                                    supporting_turn_ids=(
-                                        parsed.supporting_turn_ids
-                                        if isinstance(parsed, SubmitAnswerPlanInput)
-                                        else ()
+                                llm.FunctionCallOutput(
+                                    call_id=tool_call.call_id,
+                                    name=tool_call.name,
+                                    output=json.dumps(
+                                        rejection_output,
+                                        separators=(",", ":"),
+                                        sort_keys=True,
                                     ),
+                                    is_error=True,
                                 ),
                             )
                         )
-                        return self._finish(
-                            case_name=case_name,
-                            session=session,
-                            requests=requests,
-                            trace=trace,
-                        )
+                        session.recover_rejected_terminal(error.code)
+                        forced_tool_name = "search_material"
+                        continue
+                    return self._finish(
+                        case_name=case_name,
+                        session=session,
+                        requests=requests,
+                        trace=trace,
+                    )
 
-                session.finish()
+            session.finish()
         except TimeoutError:
             session.cancel(PlanningRejectionCode.TIMEOUT)
             return self._finish(
@@ -692,6 +760,7 @@ class LiveKitSilentPlanner:
                 usage=usage,
             ),
             tool_calls=tuple(tool_calls),
+            received_at=finished_at,
         )
 
     def _finish(
@@ -731,6 +800,29 @@ def _snapshot_ends_at_follow_up(
     for last_turn in turn_entries:
         pass
     return last_turn is not None and last_turn.turn_id == follow_up_turn_id
+
+
+def _historical_evidence_ids(
+    snapshot: ReasoningContextSnapshot,
+) -> frozenset[str]:
+    evidence_ids: set[str] = set()
+    for entry in snapshot.trace:
+        if (
+            not isinstance(entry, FunctionResultTrace)
+            or entry.name != "search_material"
+            or entry.is_error
+        ):
+            continue
+        hits = entry.output.get("hits", ())
+        if not isinstance(hits, (list, tuple)):
+            continue
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            evidence_id = hit.get("evidenceId", hit.get("evidence_id"))
+            if isinstance(evidence_id, str) and evidence_id.strip():
+                evidence_ids.add(evidence_id.strip())
+    return frozenset(evidence_ids)
 
 
 def _planning_chat_context(

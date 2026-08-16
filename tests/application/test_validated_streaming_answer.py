@@ -251,3 +251,21 @@ def test_stale_plan_and_planning_failure_never_create_answer_generation():
         DomainEventType.FOLLOW_UP_PLANNING_FAILED,
         DomainEventType.PRESENTATION_WAITING,
     ]
+
+    recovered = session.continue_presentation()
+    assert recovered.view.state.phase is PresentationPhase.PRESENTING
+    assert recovered.view.planning_failure_code is None
+    assert recovered.generation is not None
+
+
+def test_then_narration_is_explicit_application_owned_continuation():
+    session, _ = _interrupted_session()
+
+    request = session.begin_follow_up(
+        "Explain what AWS is. Then narration.",
+        provider_item_id="provider-user-follow-up",
+    )
+
+    assert request.context.continuation_preference is (
+        ContinuationPreference.CONTINUE_AFTER_ANSWER
+    )

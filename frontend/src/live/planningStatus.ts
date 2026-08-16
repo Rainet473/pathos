@@ -20,5 +20,14 @@ export function planningFailureMessage(reasonCode: string): string {
   if (reasonCode === "timeout") {
     return "Answer preparation timed out. You can ask the follow-up again.";
   }
+  if (reasonCode === "unknown_evidence") {
+    return "The presentation support changed before the answer was ready. Please ask the follow-up again.";
+  }
+  if (reasonCode === "invalid_tool_arguments") {
+    return "I could not form a complete answer request. Please finish or rephrase the follow-up.";
+  }
+  if (reasonCode === "provider_error") {
+    return "Answer preparation is temporarily unavailable. Please try the follow-up again.";
+  }
   return "The assistant could not prepare a validated answer. You can ask the follow-up again.";
 }

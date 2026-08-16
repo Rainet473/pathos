@@ -25,7 +25,8 @@ but must remain visible during later breadth and release work.
 
 ## KI-002 — Transcript discontinuity at interruption boundaries
 
-- **Status:** deferred to transcript presentation hardening.
+- **Status:** incomplete-continuation fragments hardened offline; broader live
+  transcript verification remains open.
 - **Observed:** 16 August 2026, attempts
   `2baa9b74-1d4e-4da4-8bab-0e7804b54de2` and
   `81045d4f-104d-4f9f-a15f-f943738da0d7`.
@@ -37,6 +38,10 @@ but must remain visible during later breadth and release work.
   yet a perfectly continuous reading record.
 - **Constraint:** do not fabricate missing words or merge across an intervening
   assistant turn merely to improve appearance.
+- **Offline mitigation:** an STT turn ending in an incomplete continuation tail,
+  such as “Then”, waits for one bounded adjacent fragment. If that fragment
+  arrives before answer preparation begins, the application plans the combined
+  native text once. Ordinary completed turns retain their existing latency.
 - **Later acceptance case:** interrupted segments are represented coherently and
   related STT fragments share an explicit turn identity where the provider exposes
   one; missing provider text remains visibly incomplete rather than invented.

@@ -521,6 +521,60 @@ def test_default_presentation_agent_suppresses_generation_without_validated_inst
 
 
 @pytest.mark.offline
+def test_default_presentation_agent_coalesces_incomplete_continuation_fragment():
+    from livekit.agents import llm
+
+    from voice_presentation.adapters.livekit.conversation import (
+        _default_presentation_agent_constructor,
+    )
+
+    async def scenario() -> None:
+        calls: list[tuple[str, str | None]] = []
+
+        async def prepare_user_turn(
+            question: str,
+            provider_item_id: str | None,
+        ) -> str:
+            calls.append((question, provider_item_id))
+            return "Use the combined follow-up."
+
+        agent = _default_presentation_agent_constructor(
+            instructions="Follow application evidence.",
+            prepare_user_turn=prepare_user_turn,
+            follow_up_fragment_window_seconds=0.1,
+        )
+        first_context = llm.ChatContext.empty()
+        second_context = llm.ChatContext.empty()
+        first_message = llm.ChatMessage(
+            id="provider-user-1",
+            role="user",
+            content=["Explain what AWS is. Then"],
+        )
+        second_message = llm.ChatMessage(
+            id="provider-user-2",
+            role="user",
+            content=["narration."],
+        )
+
+        first = asyncio.create_task(
+            agent.on_user_turn_completed(first_context, first_message)
+        )
+        await asyncio.sleep(0)
+        await agent.on_user_turn_completed(second_context, second_message)
+        with pytest.raises(llm.StopResponse):
+            await first
+
+        assert calls == [
+            ("Explain what AWS is. Then narration.", "provider-user-2")
+        ]
+        assert second_context.messages()[-1].text_content == (
+            "Use the combined follow-up."
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
 def test_bridge_streams_only_an_accepted_current_plan_and_resumes_after_playout():
     from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
 

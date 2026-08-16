@@ -65,6 +65,7 @@ class FollowUpPlanningSession:
         context: PlanningContext,
         search: MaterialSearchPort | None = None,
         clock: Callable[[], float] = time.monotonic,
+        started_at: float | None = None,
         active_identity: Callable[[], tuple[int, str]] | None = None,
     ) -> None:
         if provenance.session_version != context.session_version:
@@ -87,7 +88,7 @@ class FollowUpPlanningSession:
         self._active_identity = active_identity or (
             lambda: (context.session_version, context.follow_up_turn_id)
         )
-        self._started_at = clock()
+        self._started_at = clock() if started_at is None else started_at
         self._status = PlanningStatus.ACTIVE
         self._tool_steps = 0
         self._search_calls = 0
@@ -153,11 +154,13 @@ class FollowUpPlanningSession:
         *,
         session_version: int,
         follow_up_turn_id: str,
+        received_at: float | None = None,
     ) -> ValidatedAnswerPlan:
         self._assert_action_identity(
             session_version=session_version,
             follow_up_turn_id=follow_up_turn_id,
             terminal=True,
+            observed_at=received_at,
         )
         self._begin_step(search=False)
         self._terminal_attempted = True
@@ -174,6 +177,36 @@ class FollowUpPlanningSession:
         self._accepted_plan = accepted
         self._status = PlanningStatus.ACCEPTED
         return accepted
+
+    def recover_rejected_terminal(
+        self,
+        code: PlanningRejectionCode,
+    ) -> PlanningSnapshot:
+        """Reopen one bounded, explicitly recoverable terminal rejection."""
+
+        if (
+            self._status is not PlanningStatus.REJECTED
+            or self._rejection_code is not code
+            or not self._terminal_attempted
+        ):
+            raise PlanningProtocolError(
+                self._rejection_code or PlanningRejectionCode.CANCELLED,
+                "planning session has no matching rejected terminal call",
+            )
+        if code is not PlanningRejectionCode.UNKNOWN_EVIDENCE:
+            raise PlanningProtocolError(
+                code,
+                "only unknown historical evidence can be corrected",
+            )
+        if self._tool_steps >= MAX_TOOL_STEPS:
+            raise PlanningProtocolError(
+                PlanningRejectionCode.TOOL_STEP_LIMIT,
+                "planning has no remaining correction steps",
+            )
+        self._status = PlanningStatus.ACTIVE
+        self._rejection_code = None
+        self._terminal_attempted = False
+        return self.snapshot
 
     def cancel(
         self,
@@ -198,6 +231,7 @@ class FollowUpPlanningSession:
         session_version: int,
         follow_up_turn_id: str,
         terminal: bool,
+        observed_at: float | None = None,
     ) -> None:
         if self._status is not PlanningStatus.ACTIVE:
             if self._status is PlanningStatus.ACCEPTED and terminal:
@@ -209,7 +243,7 @@ class FollowUpPlanningSession:
                 self._rejection_code or PlanningRejectionCode.CANCELLED,
                 f"planning session is already {self._status.value}",
             )
-        self._check_timeout()
+        self._check_timeout(observed_at)
         if session_version != self._context.session_version:
             self.cancel(PlanningRejectionCode.STALE_SESSION)
             raise PlanningProtocolError(
@@ -239,8 +273,9 @@ class FollowUpPlanningSession:
         if search:
             self._search_calls += 1
 
-    def _check_timeout(self) -> None:
-        if self._clock() - self._started_at > self._context.timeout_seconds:
+    def _check_timeout(self, observed_at: float | None = None) -> None:
+        now = self._clock() if observed_at is None else observed_at
+        if now - self._started_at > self._context.timeout_seconds:
             self.cancel(PlanningRejectionCode.TIMEOUT)
             raise PlanningProtocolError(
                 PlanningRejectionCode.TIMEOUT,

@@ -427,6 +427,7 @@ class ApplicationPresentationSession:
         return self._finish(events)
 
     def continue_presentation(self) -> PresentationActionResult:
+        self._planning_failure_code = None
         turn_id = self._next_turn_id("narration")
         events = self._controller.continue_presentation(turn_id=turn_id)
         generation = self._narration_directive(turn_id)
@@ -636,6 +637,10 @@ class ApplicationPresentationSession:
                 "continue after answering",
                 "continue after the answer",
                 "then continue",
+                "then narration",
+                "continue narration",
+                "resume narration",
+                "then resume",
             )
         ):
             return ContinuationPreference.CONTINUE_AFTER_ANSWER

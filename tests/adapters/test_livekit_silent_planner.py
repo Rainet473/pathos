@@ -16,7 +16,11 @@ from voice_presentation.application.follow_up_planning import RecordedPlanningSu
 from voice_presentation.content.repository import JsonMaterialRepository
 from voice_presentation.domain.contracts import PresentationPhase
 from voice_presentation.domain.controller import PresentationController
-from voice_presentation.domain.reasoning import PlanningRejectionCode, PlanningStatus
+from voice_presentation.domain.reasoning import (
+    PlanningRejectionCode,
+    PlanningStage,
+    PlanningStatus,
+)
 from voice_presentation.transport.context_trace import (
     ApplicationDecisionTrace,
     FunctionCallTrace,
@@ -114,6 +118,44 @@ def _snapshot_through(turn_id: str) -> ReasoningContextSnapshot:
             **snapshot.model_dump(),
             "turns": snapshot.turns[: turn_index + 1],
             "trace": tuple(trace),
+        }
+    )
+
+
+def _snapshot_with_historical_search(turn_id: str) -> ReasoningContextSnapshot:
+    snapshot = _snapshot_through(turn_id)
+    active_turn = snapshot.trace[-1]
+    assert isinstance(active_turn, TurnMessageTrace)
+    historical_call = FunctionCallTrace(
+        call_id="historical-search-call",
+        name="search_material",
+        arguments={"keywords": ["clutch", "friction zone"]},
+    )
+    historical_result = FunctionResultTrace(
+        call_id=historical_call.call_id,
+        name=historical_call.name,
+        output={
+            "queryId": "historical-query",
+            "hits": [
+                {
+                    "evidenceId": (
+                        "motorcycle-controls.clutch-and-gears.narration.1"
+                    ),
+                    "slideId": "clutch-and-gears",
+                    "text": "Historical evidence from an earlier follow-up.",
+                }
+            ],
+        },
+        is_error=False,
+    )
+    return snapshot.model_copy(
+        update={
+            "trace": (
+                *snapshot.trace[:-1],
+                historical_call,
+                historical_result,
+                active_turn,
+            )
         }
     )
 
@@ -473,6 +515,107 @@ def test_valid_but_untrusted_terminal_arguments_are_rejected_by_application():
     assert isinstance(decision, ApplicationDecisionTrace)
     assert decision.accepted is False
     assert decision.reason_code == "unknown_evidence"
+
+
+def test_historical_evidence_rejection_can_search_current_turn_and_replan():
+    case = _case("material-search")
+    proposal = case.actions[1].input.model_dump(mode="json", by_alias=True)
+    search_input = case.actions[0].input.model_dump(mode="json", by_alias=True)
+    model = FakeLLM(
+        [
+            _response(
+                "stale-submit",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        proposal,
+                        call_id="stale-submit",
+                    ),
+                ),
+            ),
+            _response(
+                "current-search",
+                tool_calls=(
+                    _tool_call(
+                        "search_material",
+                        search_input,
+                        call_id="current-search",
+                    ),
+                ),
+            ),
+            _response(
+                "corrected-submit",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        proposal,
+                        call_id="corrected-submit",
+                    ),
+                ),
+            ),
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+
+    run = asyncio.run(
+        planner.plan(
+            case_name="historical-evidence-recovery",
+            snapshot=_snapshot_with_historical_search(
+                case.context.follow_up_turn_id
+            ),
+            context=case.context,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.ACCEPTED
+    assert run.snapshot.accepted_plan is not None
+    assert len(run.requests) == 3
+    assert model.calls[1]["tool_names"] == ("search_material",)
+    assert model.calls[2]["tool_names"] == ("submit_answer_plan",)
+    correction = json.loads(model.calls[1]["provider_messages"][-1]["content"])
+    assert correction["reasonCode"] == "unknown_evidence"
+    assert "current planning turn" in correction["applicationInstruction"]
+    decisions = [
+        entry for entry in run.trace if isinstance(entry, ApplicationDecisionTrace)
+    ]
+    assert [decision.accepted for decision in decisions] == [False, True]
+
+
+def test_terminal_response_received_before_deadline_finishes_local_validation():
+    case = _case("conversation-citation")
+    proposal = case.actions[0].input.model_dump(mode="json", by_alias=True)
+    model = FakeLLM(
+        [
+            _response(
+                "deadline-edge-submit",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        proposal,
+                        call_id="deadline-edge-submit",
+                    ),
+                ),
+            )
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+
+    async def delayed_local_stage(stage: PlanningStage) -> None:
+        if stage is PlanningStage.PREPARING:
+            await asyncio.sleep(0.06)
+
+    run = asyncio.run(
+        planner.plan(
+            case_name="deadline-edge-terminal",
+            snapshot=_snapshot_through(case.context.follow_up_turn_id),
+            context=case.context.model_copy(update={"timeout_seconds": 0.05}),
+            on_stage=delayed_local_stage,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.ACCEPTED
+    assert run.failure_code is None
+    assert len(run.requests) == 1
 
 
 def test_one_parseable_schema_failure_can_self_correct_through_native_tool_output():
