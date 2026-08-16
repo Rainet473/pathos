@@ -84,3 +84,25 @@ but must remain visible during later breadth and release work.
   structure for the runtime to consume.
 - **Later acceptance case:** a deterministic importer turns a supplied deck plus
   handout into a validated package and emits a review report before runtime use.
+
+## KI-006 — Referential follow-up questions can lose their antecedent
+
+- **Status:** deferred to conversational-retrieval hardening.
+- **Observed:** 16 August 2026, attempt
+  `35a5be63-5af1-447d-871d-e76ce8cdc3b8`.
+- **Behavior:** short follow-ups such as “Can you explain me once again how this
+  ratio helped?” and “What is the jerk you mentioned about?” were disclosed as
+  `out_of_scope`, even though the captured conversation contained the antecedent
+  and the packaged material contains the relevant concepts.
+- **Impact:** provider context delivery is intact, but the application-selected
+  answer mode can be wrong. Model history cannot repair that decision because
+  application code selects and validates the evidence before generation.
+- **Likely seam:** the deterministic question resolver receives the current
+  utterance and visible-slide preference, but no bounded conversational
+  antecedent or explicit follow-up identity.
+- **Constraint:** do not make generated prose responsible for navigation or
+  silently let the provider override the disclosed answer mode.
+- **Later acceptance case:** resolve a bounded recent antecedent into explicit
+  application input, prove the same question is classified consistently after
+  interruption and manual navigation, and retain the current deterministic
+  transition checks.

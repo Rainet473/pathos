@@ -51,12 +51,15 @@ values or reclassifying an unexpected provider failure as a graceful end.
 
 ## Human observation
 
-- Attempt ID: pending.
-- Final completed state remains available for follow-up questions: pending.
+- Attempt ID: `35a5be63-5af1-447d-871d-e76ce8cdc3b8`.
+- Final completed state remained visible and browsable: passed.
+- The session completed without the earlier unexpected mid-deck disconnect:
+  passed.
 - Inactivity message, if explicitly observed: pending.
-- Backend warnings absent: pending.
+- Backend warnings absent: not independently captured in the retained evidence.
 
 ## Exit evidence
 
-Automated exit gates passed. One user-observed full-deck run remains before this
-slice is considered acoustically closed.
+Automated gates and one user-observed full-deck lifecycle passed. The explicit
+inactivity-timeout observation remains pending; the 15-minute absolute ceiling
+was not waited out during this release run.

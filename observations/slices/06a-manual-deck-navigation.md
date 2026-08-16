@@ -56,6 +56,22 @@ listener -> deck control -> LiveKit data command -> application validation
   next user-run observation because accepting microphone permission and spending
   provider quota were not part of this automated gate.
 
+## Live observation: 16 August 2026
+
+- Attempt: `35a5be63-5af1-447d-871d-e76ce8cdc3b8`.
+- User-confirmed result: browsing, interruption, questions, direct continuation,
+  and final completion worked.
+- Retained screenshots show an uncommitted active beat during browsing and a
+  completed presentation whose visible slide differs from the final semantic
+  cursor without changing it.
+- The sanitized context audit confirms interrupted assistant history remained
+  marked and did not show accumulating provider latency.
+- Two short referential follow-ups were falsely disclosed as `out_of_scope`;
+  this retrieval defect is tracked separately as KI-006.
+
+The live observation closes the manual-navigation boundary. It does not close
+the explicitly excluded answer-playout navigation or generic deck-import work.
+
 ## Fallback or rollback
 
 Keep read-only Previous/Next browsing in ready/waiting/completed phases and defer
