@@ -18,6 +18,7 @@ describe("live conversation state", () => {
       transcript: [],
       presentation: null,
       failure: null,
+      endReason: null,
       needsAudioUnlock: false,
       timing: {
         providerResponseStartGapMs: null,
@@ -195,6 +196,30 @@ describe("live conversation state", () => {
       attemptId: "f19d6458-7145-4388-8337-841d27a428ec",
     });
     expect(state.phase).toBe("stopped");
+  });
+
+  it("records inactivity and absolute-limit endings as neutral stopped states", () => {
+    let state = reduceLiveState(initialLiveState(), {
+      type: "start_requested",
+      attemptId: attempt,
+    });
+    state = reduceLiveState(state, { type: "connected", attemptId: attempt, backend });
+    state = reduceLiveState(state, {
+      type: "ended",
+      attemptId: attempt,
+      reason: "idle_timeout",
+    });
+
+    expect(state.phase).toBe("stopped");
+    expect(state.endReason).toBe("idle_timeout");
+    expect(state.failure).toBeNull();
+
+    state = reduceLiveState(state, {
+      type: "failed",
+      attemptId: attempt,
+      reason: "late room callback",
+    });
+    expect(state.failure).toBeNull();
   });
 });
 

@@ -226,6 +226,7 @@ def test_livekit_inference_factory_uses_documented_three_model_starter():
         {
             "turn_detection": "stt",
             "endpointing": {"min_delay": 1.2, "max_delay": 3.0},
+            "preemptive_generation": False,
         }
     ]
     assert session_constructor.calls == [

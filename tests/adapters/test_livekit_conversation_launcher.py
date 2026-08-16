@@ -226,7 +226,8 @@ def test_conversation_session_connects_starts_and_closes_on_browser_departure():
             voice_session_factory=factory,
             room=room,
             agent_constructor=agent_constructor,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
 
@@ -280,7 +281,8 @@ def test_conversation_session_owns_http_context_for_full_provider_lifecycle():
             room=room,
             agent_constructor=RecordingAgentConstructor(),
             http_context_factory=lambda: RecordingAsyncContext(events),
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -313,7 +315,8 @@ def test_conversation_session_provider_error_is_failed_and_releases_resources():
             voice_session_factory=FakeVoiceSessionFactory(agent_session),
             room=room,
             agent_constructor=RecordingAgentConstructor(),
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -372,7 +375,8 @@ def test_conversation_session_records_and_publishes_safe_timing_events():
             room=room,
             agent_constructor=RecordingAgentConstructor(),
             diagnostic_ledger=diagnostics,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -384,19 +388,29 @@ def test_conversation_session_records_and_publishes_safe_timing_events():
         agent_session.handlers["agent_state_changed"](
             SimpleNamespace(old_state="thinking", new_state="speaking")
         )
-        agent_session.handlers["metrics_collected"](
+        agent_session.handlers["conversation_item_added"](
             SimpleNamespace(
-                metrics=SimpleNamespace(
-                    type="realtime_model_metrics",
-                    ttft=1.5,
-                    duration=2.0,
-                    cancelled=False,
-                    input_tokens=5,
-                    output_tokens=4,
-                    total_tokens=9,
-                    acquire_time=0.1,
-                    connection_reused=True,
-                    input_token_details=SimpleNamespace(cached_tokens=0),
+                item=SimpleNamespace(
+                    id="user-1",
+                    role="user",
+                    text_content="A concise question.",
+                    metrics={
+                        "end_of_turn_delay": 0.5,
+                        "on_user_turn_completed_delay": 0.2,
+                    },
+                )
+            )
+        )
+        agent_session.handlers["conversation_item_added"](
+            SimpleNamespace(
+                item=SimpleNamespace(
+                    id="assistant-1",
+                    role="assistant",
+                    text_content="A concise answer.",
+                    metrics={
+                        "llm_node_ttft": 1.5,
+                        "tts_node_ttfb": 0.4,
+                    },
                 )
             )
         )
@@ -409,14 +423,27 @@ def test_conversation_session_records_and_publishes_safe_timing_events():
         assert [event.event_type for event in diagnostics.events] == [
             "user_state_changed",
             "agent_state_changed",
-            "realtime_model_metrics",
+            "turn_metrics",
+            "turn_metrics",
         ]
         assert diagnostics.events[1].fields == {
             "oldState": "thinking",
             "newState": "speaking",
         }
-        assert diagnostics.events[2].fields["modelTtftMs"] == 1500
-        assert len(room.local_participant.publish_calls) == 3
+        assert diagnostics.events[2].fields == {
+            "endOfUtteranceDelayMs": 500,
+            "turnCallbackDelayMs": 200,
+        }
+        assert diagnostics.events[3].fields == {
+            "llmTtftMs": 1500,
+            "ttsTtfbMs": 400,
+        }
+        diagnostic_calls = [
+            call
+            for call in room.local_participant.publish_calls
+            if call[1].get("topic") == CONVERSATION_DIAGNOSTICS_TOPIC
+        ]
+        assert len(diagnostic_calls) == 4
         assert all(
             call[1]
             == {
@@ -424,8 +451,99 @@ def test_conversation_session_records_and_publishes_safe_timing_events():
                 "destination_identities": [_spec().browser_identity],
                 "topic": CONVERSATION_DIAGNOSTICS_TOPIC,
             }
-            for call in room.local_participant.publish_calls
+            for call in diagnostic_calls
         )
-        assert all("transcript" not in call[0].lower() for call in room.local_participant.publish_calls)
+        assert "metrics_collected" not in agent_session.handlers
 
     asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_conversation_session_ends_normally_after_inactivity_and_reports_reason():
+    from voice_presentation.adapters.livekit.conversation import (
+        CONVERSATION_LIFECYCLE_TOPIC,
+        LiveKitConversationSession,
+    )
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            agent_constructor=RecordingAgentConstructor(),
+            idle_timeout_seconds=0.02,
+            absolute_timeout_seconds=1,
+        )
+
+        await asyncio.wait_for(runner.run(asyncio.Event()), timeout=0.2)
+
+        assert runner.termination_reason == "idle_timeout"
+        assert runner.usage_outcome == "completed"
+        lifecycle_calls = [
+            call
+            for call in room.local_participant.publish_calls
+            if call[1].get("topic") == CONVERSATION_LIFECYCLE_TOPIC
+        ]
+        assert len(lifecycle_calls) == 1
+        assert '"reason":"idle_timeout"' in lifecycle_calls[0][0]
+        assert agent_session.close_count == 1
+        assert room.disconnect_count == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_conversation_activity_resets_idle_but_not_absolute_deadline():
+    from types import SimpleNamespace
+
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def idle_reset_scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            agent_constructor=RecordingAgentConstructor(),
+            idle_timeout_seconds=0.04,
+            absolute_timeout_seconds=1,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        await asyncio.sleep(0.025)
+        agent_session.handlers["user_state_changed"](
+            SimpleNamespace(old_state="listening", new_state="speaking")
+        )
+        await asyncio.sleep(0.025)
+        assert not task.done()
+        await asyncio.wait_for(task, timeout=0.1)
+        assert runner.termination_reason == "idle_timeout"
+
+    async def absolute_scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            agent_constructor=RecordingAgentConstructor(),
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=0.04,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        for _ in range(3):
+            await asyncio.sleep(0.01)
+            agent_session.handlers["agent_state_changed"](
+                SimpleNamespace(old_state="thinking", new_state="speaking")
+            )
+        await asyncio.wait_for(task, timeout=0.1)
+        assert runner.termination_reason == "absolute_timeout"
+
+    asyncio.run(idle_reset_scenario())
+    asyncio.run(absolute_scenario())

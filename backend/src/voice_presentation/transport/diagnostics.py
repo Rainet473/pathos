@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -166,6 +166,23 @@ class ConversationDiagnostics:
         else:
             fields = {"metricType": metric_type}
         return self._record(metric_type, elapsed_ms, fields)
+
+    def record_turn_metrics(
+        self, metrics: Mapping[str, object]
+    ) -> ConversationDiagnosticEvent:
+        elapsed_ms = self._elapsed_ms()
+        field_names = {
+            "end_of_turn_delay": "endOfUtteranceDelayMs",
+            "on_user_turn_completed_delay": "turnCallbackDelayMs",
+            "llm_node_ttft": "llmTtftMs",
+            "tts_node_ttfb": "ttsTtfbMs",
+        }
+        fields: dict[str, DiagnosticScalar] = {}
+        for source_name, wire_name in field_names.items():
+            value = metrics.get(source_name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                fields[wire_name] = _milliseconds(value)
+        return self._record("turn_metrics", elapsed_ms, fields)
 
     def _realtime_model_fields(
         self, metrics: object, *, elapsed_ms: int

@@ -142,7 +142,8 @@ def test_agent_session_events_publish_stable_user_and_final_agent_transcript():
             room=room,
             agent_constructor=lambda **_kwargs: object(),
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -193,7 +194,8 @@ def test_blank_and_unsupported_transcript_events_do_not_publish():
             room=room,
             agent_constructor=lambda **_kwargs: object(),
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -226,7 +228,8 @@ def test_closely_spaced_final_user_fragments_accumulate_into_one_entry():
             agent_constructor=lambda **_kwargs: object(),
             http_context_factory=NullAsyncContext,
             transcript_clock=lambda: next(timestamps),
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -293,7 +296,8 @@ def test_blank_final_closes_interim_identity():
             room=room,
             agent_constructor=lambda **_kwargs: object(),
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -330,7 +334,8 @@ def test_transcript_publish_failure_is_non_fatal(
             room=room,
             agent_constructor=lambda **_kwargs: object(),
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))

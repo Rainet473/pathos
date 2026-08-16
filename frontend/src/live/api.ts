@@ -11,6 +11,8 @@ interface BootstrapWireResponse {
   server_url: string;
   participant_token: string;
   backend: VoiceBackendIdentity;
+  idle_timeout_seconds: number;
+  absolute_timeout_seconds: number;
 }
 
 export async function createLiveSession(
@@ -40,5 +42,7 @@ export async function createLiveSession(
     serverUrl: value.server_url,
     participantToken: value.participant_token,
     backend: value.backend,
+    idleTimeoutSeconds: value.idle_timeout_seconds,
+    absoluteTimeoutSeconds: value.absolute_timeout_seconds,
   };
 }

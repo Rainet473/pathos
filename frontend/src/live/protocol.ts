@@ -20,6 +20,8 @@ export interface LiveSessionResponse extends LiveAttemptIdentifiers {
   serverUrl: string;
   participantToken: string;
   backend: VoiceBackendIdentity;
+  idleTimeoutSeconds: number;
+  absoluteTimeoutSeconds: number;
 }
 
 export function createLiveAttemptIdentifiers(

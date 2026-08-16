@@ -305,6 +305,7 @@ class LiveKitInferencePipelineFactory:
         turn_handling = self._turn_handling_constructor(
             turn_detection="stt",
             endpointing={"min_delay": 1.2, "max_delay": 3.0},
+            preemptive_generation=False,
         )
         return self._agent_session_constructor(
             stt=stt,

@@ -6,6 +6,7 @@ import { createLiveSession } from "./api";
 import { LiveKitConversationTransport } from "./livekitTransport";
 import { createLiveAttemptIdentifiers } from "./protocol";
 import { initialLiveState, reduceLiveState, type LivePhase } from "./state";
+import type { LiveSessionEndReason } from "./lifecycle";
 
 export default function LiveConversationApp() {
   const [state, dispatch] = useReducer(reduceLiveState, undefined, initialLiveState);
@@ -51,6 +52,10 @@ export default function LiveConversationApp() {
       onPresentation: (update) => {
         if (transport.current !== client) return;
         dispatch({ type: "presentation", attemptId: identifiers.attemptId, update });
+      },
+      onEnded: (reason) => {
+        if (transport.current !== client) return;
+        dispatch({ type: "ended", attemptId: identifiers.attemptId, reason });
       },
       onDisconnected: () => {
         if (transport.current !== client) return;
@@ -130,7 +135,7 @@ export default function LiveConversationApp() {
           <p className="lede">
             Start connects the microphone and selected LiveKit pipeline. The page remains quiet and disconnected until then.
           </p>
-          <ConnectionStatus phase={state.phase} />
+          <ConnectionStatus phase={state.phase} endReason={state.endReason} />
           <div className="actions">
             <button type="button" onClick={() => void start()} disabled={!canStart}>
               {state.phase === "idle" ? "Start presentation" : "New attempt"}
@@ -212,7 +217,7 @@ export default function LiveConversationApp() {
           {state.backend ? (
             <dl className="metrics live-provider">
               <div><dt>Provider</dt><dd>{state.backend.provider}</dd></div>
-              <div><dt>Connection state</dt><dd>{phaseLabel(state.phase)}</dd></div>
+              <div><dt>Connection state</dt><dd>{phaseLabel(state.phase, state.endReason)}</dd></div>
             </dl>
           ) : null}
           {state.failure ? <p className="failure">{state.failure}</p> : null}
@@ -259,11 +264,17 @@ export default function LiveConversationApp() {
   );
 }
 
-function ConnectionStatus({ phase }: { phase: LivePhase }) {
+function ConnectionStatus({
+  phase,
+  endReason,
+}: {
+  phase: LivePhase;
+  endReason: LiveSessionEndReason | null;
+}) {
   return (
     <div className={`status status-${phase}`}>
       <span className="status-dot" aria-hidden="true" />
-      <div><strong>{phaseLabel(phase)}</strong><p>{phaseInstruction(phase)}</p></div>
+      <div><strong>{phaseLabel(phase, endReason)}</strong><p>{phaseInstruction(phase, endReason)}</p></div>
     </div>
   );
 }
@@ -285,7 +296,12 @@ function isActive(phase: LivePhase): boolean {
   return ["connecting", "listening", "thinking", "speaking", "interrupted"].includes(phase);
 }
 
-function phaseLabel(phase: LivePhase): string {
+function phaseLabel(
+  phase: LivePhase,
+  endReason: LiveSessionEndReason | null = null,
+): string {
+  if (endReason === "idle_timeout") return "Session ended after inactivity";
+  if (endReason === "absolute_timeout") return "15-minute session limit reached";
   return {
     idle: "Quiet and disconnected",
     connecting: "Connecting",
@@ -298,7 +314,16 @@ function phaseLabel(phase: LivePhase): string {
   }[phase];
 }
 
-function phaseInstruction(phase: LivePhase): string {
+function phaseInstruction(
+  phase: LivePhase,
+  endReason: LiveSessionEndReason | null = null,
+): string {
+  if (endReason === "idle_timeout") {
+    return "The room and microphone were released after two quiet minutes.";
+  }
+  if (endReason === "absolute_timeout") {
+    return "The room and microphone were released at the absolute safety limit.";
+  }
   return {
     idle: "No room, microphone or model connection exists until Start.",
     connecting: "Starting the selected provider and requesting microphone access.",

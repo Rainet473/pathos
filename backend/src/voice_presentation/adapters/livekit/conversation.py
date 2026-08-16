@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Protocol
@@ -22,6 +22,11 @@ from voice_presentation.transport.diagnostics import (
     ConversationDiagnosticLedger,
     ConversationDiagnostics,
     NullConversationDiagnosticLedger,
+)
+from voice_presentation.transport.lifecycle import (
+    CONVERSATION_LIFECYCLE_TOPIC,
+    ConversationLifecycleReason,
+    ConversationLifecycleUpdate,
 )
 from voice_presentation.transport.usage import NullUsageLedger, UsageLedger, UsageRecord
 from voice_presentation.transport.presentation import (
@@ -264,10 +269,23 @@ class LiveKitConversationSession:
         diagnostic_ledger: ConversationDiagnosticLedger | None = None,
         transcript_clock: Callable[[], float] = time.monotonic,
         transcript_merge_window_seconds: float = 1.5,
-        session_timeout_seconds: float = 180,
+        idle_timeout_seconds: float | None = None,
+        absolute_timeout_seconds: float | None = None,
     ) -> None:
-        if session_timeout_seconds <= 0:
-            raise ValueError("session timeout must be positive")
+        idle_timeout_seconds = (
+            spec.idle_timeout_seconds
+            if idle_timeout_seconds is None
+            else idle_timeout_seconds
+        )
+        absolute_timeout_seconds = (
+            spec.absolute_timeout_seconds
+            if absolute_timeout_seconds is None
+            else absolute_timeout_seconds
+        )
+        if idle_timeout_seconds <= 0:
+            raise ValueError("idle timeout must be positive")
+        if absolute_timeout_seconds <= 0:
+            raise ValueError("absolute timeout must be positive")
         if transcript_merge_window_seconds <= 0:
             raise ValueError("transcript merge window must be positive")
         self._spec = spec
@@ -277,8 +295,11 @@ class LiveKitConversationSession:
         self._presentation_session = presentation_session
         self._presentation_agent_constructor = presentation_agent_constructor
         self._http_context_factory = http_context_factory
-        self._session_timeout_seconds = session_timeout_seconds
+        self._idle_timeout_seconds = idle_timeout_seconds
+        self._absolute_timeout_seconds = absolute_timeout_seconds
         self._finished = asyncio.Event()
+        self._activity: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        self._termination_reason: str | None = None
         self._agent_session: object | None = None
         self._usage_outcome = "completed"
         self._diagnostics = ConversationDiagnostics(
@@ -310,6 +331,10 @@ class LiveKitConversationSession:
         return self._usage_outcome
 
     @property
+    def termination_reason(self) -> str | None:
+        return self._termination_reason
+
+    @property
     def active_speech_handle(self) -> object | None:
         if self._active_speech is None:
             return None
@@ -339,10 +364,13 @@ class LiveKitConversationSession:
                         )
                     await self._agent_session.start(agent, room=self._room)
                     ready.set()
-                    with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(
-                            self._finished.wait(),
-                            timeout=self._session_timeout_seconds,
+                    terminal_reason = await self._wait_for_session_end()
+                    if terminal_reason in {
+                        ConversationLifecycleReason.IDLE_TIMEOUT.value,
+                        ConversationLifecycleReason.ABSOLUTE_TIMEOUT.value,
+                    }:
+                        await self._publish_lifecycle(
+                            ConversationLifecycleReason(terminal_reason)
                         )
                 finally:
                     if self._presentation_tasks:
@@ -373,6 +401,8 @@ class LiveKitConversationSession:
     def _register_room_events(self) -> None:
         @self._room.on("participant_connected")
         def on_participant_connected(participant: rtc.RemoteParticipant) -> None:
+            if participant.identity == self._spec.browser_identity:
+                self._touch_activity()
             if (
                 self._presentation_session is not None
                 and participant.identity == self._spec.browser_identity
@@ -395,17 +425,20 @@ class LiveKitConversationSession:
                 logger.warning("Ignored malformed presentation command")
                 return
             if command.action == "continue":
+                self._touch_activity()
                 self._queue_presentation(self._continue_presentation())
 
         @self._room.on("participant_disconnected")
         def on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
             if participant.identity == self._spec.browser_identity:
+                self._termination_reason = "browser_disconnected"
                 self._finished.set()
 
         @self._room.on("disconnected")
         def on_disconnected(_reason: object) -> None:
             if not self._finished.is_set():
                 self._usage_outcome = "failed"
+                self._termination_reason = "unexpected_disconnect"
                 self._finished.set()
 
     def _register_agent_events(self, agent_session: object) -> None:
@@ -417,6 +450,7 @@ class LiveKitConversationSession:
                 if is_final:
                     self._close_user_transcript_group()
                 return
+            self._touch_activity()
             now = self._transcript_clock()
             if self._active_user_transcript_id is None:
                 can_merge = (
@@ -460,7 +494,23 @@ class LiveKitConversationSession:
         @agent_session.on("conversation_item_added")
         def on_conversation_item_added(event: object) -> None:
             item = getattr(event, "item", None)
-            if item is None or str(getattr(item, "role", "")) != "assistant":
+            if item is None:
+                return
+            self._touch_activity()
+            metrics = getattr(item, "metrics", None)
+            supported_metric_names = {
+                "end_of_turn_delay",
+                "on_user_turn_completed_delay",
+                "llm_node_ttft",
+                "tts_node_ttfb",
+            }
+            if isinstance(metrics, Mapping) and any(
+                name in metrics for name in supported_metric_names
+            ):
+                self._queue_diagnostic(
+                    self._diagnostics.record_turn_metrics(metrics)
+                )
+            if str(getattr(item, "role", "")) != "assistant":
                 return
             text = str(getattr(item, "text_content", "")).strip()
             if not text:
@@ -483,6 +533,7 @@ class LiveKitConversationSession:
 
         @agent_session.on("user_state_changed")
         def on_user_state_changed(event: object) -> None:
+            self._touch_activity()
             diagnostic = self._diagnostics.record_user_state(
                 old_state=str(getattr(event, "old_state")),
                 new_state=str(getattr(event, "new_state")),
@@ -491,6 +542,7 @@ class LiveKitConversationSession:
 
         @agent_session.on("agent_state_changed")
         def on_agent_state_changed(event: object) -> None:
+            self._touch_activity()
             diagnostic = self._diagnostics.record_agent_state(
                 old_state=str(getattr(event, "old_state")),
                 new_state=str(getattr(event, "new_state")),
@@ -504,6 +556,7 @@ class LiveKitConversationSession:
 
         @agent_session.on("speech_created")
         def on_speech_created(event: object) -> None:
+            self._touch_activity()
             if self._presentation_session is None:
                 return
             directive = self._pending_generation
@@ -512,17 +565,53 @@ class LiveKitConversationSession:
             self._bind_speech(getattr(event, "speech_handle"), directive)
             self._pending_generation = None
 
-        @agent_session.on("metrics_collected")
-        def on_metrics_collected(event: object) -> None:
-            diagnostic = self._diagnostics.record_metrics(
-                getattr(event, "metrics")
-            )
-            self._queue_diagnostic(diagnostic)
-
         @agent_session.on("error")
         def on_error(_event: object) -> None:
             self._usage_outcome = "failed"
+            self._termination_reason = "provider_error"
             self._finished.set()
+
+    def _touch_activity(self) -> None:
+        if self._activity.empty():
+            self._activity.put_nowait(None)
+
+    async def _wait_for_session_end(self) -> str:
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        idle_deadline = started_at + self._idle_timeout_seconds
+        absolute_deadline = started_at + self._absolute_timeout_seconds
+
+        while not self._finished.is_set():
+            now = loop.time()
+            deadline = min(idle_deadline, absolute_deadline)
+            remaining = deadline - now
+            if remaining <= 0:
+                reason = (
+                    ConversationLifecycleReason.ABSOLUTE_TIMEOUT.value
+                    if absolute_deadline <= idle_deadline
+                    else ConversationLifecycleReason.IDLE_TIMEOUT.value
+                )
+                self._termination_reason = reason
+                return reason
+
+            finished_waiter = asyncio.create_task(self._finished.wait())
+            activity_waiter = asyncio.create_task(self._activity.get())
+            done, pending = await asyncio.wait(
+                {finished_waiter, activity_waiter},
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for waiter in pending:
+                waiter.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+            if finished_waiter in done and self._finished.is_set():
+                return self._termination_reason or "stopped"
+            if activity_waiter in done:
+                idle_deadline = loop.time() + self._idle_timeout_seconds
+
+        return self._termination_reason or "stopped"
 
     def _close_user_transcript_group(self) -> None:
         self._active_user_transcript_id = None
@@ -698,6 +787,7 @@ class LiveKitConversationSession:
         self,
         result: PresentationActionResult,
     ) -> None:
+        self._touch_activity()
         update = PresentationStateUpdate.from_view(
             attempt_id=self._spec.attempt_id,
             view=result.view,
@@ -712,6 +802,27 @@ class LiveKitConversationSession:
         except Exception:
             logger.warning(
                 "Could not publish presentation state",
+                exc_info=True,
+            )
+
+    async def _publish_lifecycle(
+        self,
+        reason: ConversationLifecycleReason,
+    ) -> None:
+        update = ConversationLifecycleUpdate(
+            attempt_id=self._spec.attempt_id,
+            reason=reason,
+        )
+        try:
+            await self._room.local_participant.publish_data(
+                update.to_json(),
+                reliable=True,
+                destination_identities=[self._spec.browser_identity],
+                topic=CONVERSATION_LIFECYCLE_TOPIC,
+            )
+        except Exception:
+            logger.warning(
+                "Could not publish conversation lifecycle event",
                 exc_info=True,
             )
 

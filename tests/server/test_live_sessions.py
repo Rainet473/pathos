@@ -80,16 +80,21 @@ def test_live_bootstrap_launches_selected_backend_and_returns_browser_credential
         "server_url": "wss://example.livekit.cloud",
         "participant_token": "signed-browser-9ea3a1cb",
         "backend": BACKEND.model_dump(mode="json"),
+        "idle_timeout_seconds": 120,
+        "absolute_timeout_seconds": 900,
     }
     assert len(launcher.calls) == 1
     launched = launcher.calls[0]
     assert launched.instructions == "Be concise. Do not use tools."
     assert launched.backend == BACKEND
+    assert launched.idle_timeout_seconds == 120
+    assert launched.absolute_timeout_seconds == 900
     assert [call["identity"] for call in issuer.calls] == [
         "browser-9ea3a1cb",
         "voice-worker-9ea3a1cb",
     ]
     assert all(call["can_publish_sources"] == ("microphone",) for call in issuer.calls)
+    assert all(call["ttl_seconds"] == 900 for call in issuer.calls)
     assert "google" not in response.text.lower() or "google_api_key" not in response.text.lower()
     assert "api_key" not in response.text.lower()
     assert "api_secret" not in response.text.lower()

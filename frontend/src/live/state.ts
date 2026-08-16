@@ -1,6 +1,7 @@
 import type { VoiceBackendIdentity } from "./protocol";
 import type { ConversationDiagnosticEvent } from "./diagnostics";
 import type { LivePresentationView, PresentationStateUpdate } from "./presentation";
+import type { LiveSessionEndReason } from "./lifecycle";
 
 export type LivePhase =
   | "idle"
@@ -28,6 +29,7 @@ export interface LiveState {
   transcript: TranscriptEntry[];
   presentation: LivePresentationView | null;
   failure: string | null;
+  endReason: LiveSessionEndReason | null;
   needsAudioUnlock: boolean;
   timing: LiveTimingSummary;
 }
@@ -52,6 +54,7 @@ export type LiveAction =
   | { type: "audio_playback_blocked"; attemptId: string }
   | { type: "audio_playback_unlocked"; attemptId: string }
   | { type: "stopped"; attemptId: string }
+  | { type: "ended"; attemptId: string; reason: LiveSessionEndReason }
   | { type: "failed"; attemptId: string; reason: string };
 
 export function initialLiveState(): LiveState {
@@ -62,6 +65,7 @@ export function initialLiveState(): LiveState {
     transcript: [],
     presentation: null,
     failure: null,
+    endReason: null,
     needsAudioUnlock: false,
     timing: emptyTiming(),
   };
@@ -82,6 +86,7 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
       transcript: [],
       presentation: null,
       failure: null,
+      endReason: null,
       needsAudioUnlock: false,
       timing: emptyTiming(),
     };
@@ -137,7 +142,16 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
     case "stopped":
       return ["stopped", "failure"].includes(state.phase)
         ? state
-        : { ...state, phase: "stopped", needsAudioUnlock: false };
+        : { ...state, phase: "stopped", endReason: null, needsAudioUnlock: false };
+    case "ended":
+      return ["stopped", "failure"].includes(state.phase)
+        ? state
+        : {
+            ...state,
+            phase: "stopped",
+            endReason: action.reason,
+            needsAudioUnlock: false,
+          };
     case "failed":
       return ["stopped", "failure"].includes(state.phase)
         ? state

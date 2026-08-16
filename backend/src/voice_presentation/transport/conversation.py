@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from voice_presentation.transport.bootstrap import JoinTokenIssuer
 from voice_presentation.voice.sessions import VoiceBackendIdentity
 
+DEFAULT_CONVERSATION_IDLE_TIMEOUT_SECONDS = 120
+DEFAULT_CONVERSATION_ABSOLUTE_TIMEOUT_SECONDS = 900
+
 
 class ConversationSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -34,6 +37,8 @@ class ConversationSessionResponse(BaseModel):
     server_url: str
     participant_token: str
     backend: VoiceBackendIdentity
+    idle_timeout_seconds: int
+    absolute_timeout_seconds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +51,8 @@ class ConversationSessionSpec:
     worker_token: str
     instructions: str
     backend: VoiceBackendIdentity
+    idle_timeout_seconds: int = DEFAULT_CONVERSATION_IDLE_TIMEOUT_SECONDS
+    absolute_timeout_seconds: int = DEFAULT_CONVERSATION_ABSOLUTE_TIMEOUT_SECONDS
 
 
 class ConversationSessionLauncher(Protocol):
@@ -91,7 +98,9 @@ class ConversationBootstrapService:
         token_issuer: JoinTokenIssuer,
         session_launcher: ConversationSessionLauncher,
         instructions: str,
-        token_ttl_seconds: int = 300,
+        token_ttl_seconds: int = DEFAULT_CONVERSATION_ABSOLUTE_TIMEOUT_SECONDS,
+        idle_timeout_seconds: int = DEFAULT_CONVERSATION_IDLE_TIMEOUT_SECONDS,
+        absolute_timeout_seconds: int = DEFAULT_CONVERSATION_ABSOLUTE_TIMEOUT_SECONDS,
     ) -> None:
         if not server_url.startswith(("ws://", "wss://")):
             raise ValueError("LiveKit server URL must use ws:// or wss://")
@@ -99,11 +108,27 @@ class ConversationBootstrapService:
             raise ValueError("instructions must not be blank")
         if not 60 <= token_ttl_seconds <= 900:
             raise ValueError("conversation token TTL must be between 60 and 900 seconds")
+        if idle_timeout_seconds <= 0:
+            raise ValueError("conversation idle timeout must be positive")
+        if not 0 < absolute_timeout_seconds <= 900:
+            raise ValueError(
+                "conversation absolute timeout must be at most fifteen minutes"
+            )
+        if idle_timeout_seconds >= absolute_timeout_seconds:
+            raise ValueError(
+                "conversation idle timeout must be shorter than the absolute timeout"
+            )
+        if token_ttl_seconds < absolute_timeout_seconds:
+            raise ValueError(
+                "conversation token TTL must cover the absolute timeout"
+            )
         self._server_url = server_url
         self._token_issuer = token_issuer
         self._session_launcher = session_launcher
         self._instructions = instructions
         self._token_ttl_seconds = token_ttl_seconds
+        self._idle_timeout_seconds = idle_timeout_seconds
+        self._absolute_timeout_seconds = absolute_timeout_seconds
 
     async def create_session(
         self, request: ConversationSessionRequest
@@ -135,6 +160,8 @@ class ConversationBootstrapService:
             worker_token=worker_token,
             instructions=self._instructions,
             backend=self._session_launcher.identity,
+            idle_timeout_seconds=self._idle_timeout_seconds,
+            absolute_timeout_seconds=self._absolute_timeout_seconds,
         )
         await self._session_launcher.launch(session)
         return ConversationSessionResponse(
@@ -144,6 +171,8 @@ class ConversationBootstrapService:
             server_url=self._server_url,
             participant_token=participant_token,
             backend=self._session_launcher.identity,
+            idle_timeout_seconds=self._idle_timeout_seconds,
+            absolute_timeout_seconds=self._absolute_timeout_seconds,
         )
 
     async def aclose(self) -> None:

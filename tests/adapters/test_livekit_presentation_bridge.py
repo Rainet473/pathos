@@ -183,7 +183,8 @@ def test_bridge_runs_one_grounded_interruption_and_waits_after_answer():
             presentation_session=_application_session(),
             presentation_agent_constructor=agent_constructor,
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -302,7 +303,8 @@ def test_bridge_answer_and_continue_schedules_same_beat_with_new_turn():
             presentation_session=_application_session(),
             presentation_agent_constructor=agent_constructor,
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))
@@ -364,7 +366,8 @@ def test_bridge_answers_question_received_just_after_presentation_completion():
             presentation_session=_application_session(),
             presentation_agent_constructor=agent_constructor,
             http_context_factory=NullAsyncContext,
-            session_timeout_seconds=1,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
         )
         ready = asyncio.Event()
         task = asyncio.create_task(runner.run(ready))

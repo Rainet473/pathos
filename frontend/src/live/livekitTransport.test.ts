@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoomEvent, Track } from "livekit-client";
 
 import { LiveKitConversationTransport } from "./livekitTransport";
@@ -74,6 +74,8 @@ const session: LiveSessionResponse = {
   participantIdentity: "browser-9ea3a1cb",
   serverUrl: "wss://example.livekit.cloud",
   participantToken: "participant-token",
+  idleTimeoutSeconds: 120,
+  absoluteTimeoutSeconds: 900,
   backend: {
     provider: "gemini_live",
     kind: "realtime",
@@ -94,13 +96,13 @@ function setup() {
       onTranscript: (entry) => events.push(["transcript", entry]),
       onDiagnostic: (event) => events.push(["diagnostic", event]),
       onPresentation: (event) => events.push(["presentation", event]),
+      onEnded: (reason) => events.push(["ended", reason]),
       onDisconnected: () => events.push(["disconnected", null]),
       onAudioPlaybackBlocked: () => events.push(["blocked", null]),
     },
     {
       roomFactory: () => room as never,
       microphoneFactory: async () => microphone as never,
-      sessionTimeoutMs: 1_000,
       audioElementHost: { append: (element) => appended.push(element) },
     },
   );
@@ -108,6 +110,10 @@ function setup() {
 }
 
 describe("LiveKit conversation transport", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("does nothing on construction and starts room plus microphone only on connect", async () => {
     const { room, microphone, events, transport } = setup();
     expect(room.connectCalls).toEqual([]);
@@ -254,6 +260,81 @@ describe("LiveKit conversation transport", () => {
     expect(microphone.stopped).toBe(true);
     expect(audio.element.removed).toBe(true);
     expect(room.disconnectCount).toBe(1);
+  });
+
+  it("ends normally after inactivity and meaningful activity resets only the idle deadline", async () => {
+    vi.useFakeTimers();
+    const { room, events, transport } = setup();
+    await transport.connect({
+      ...session,
+      idleTimeoutSeconds: 0.05,
+      absoluteTimeoutSeconds: 0.2,
+    });
+
+    await vi.advanceTimersByTimeAsync(40);
+    room.handlers.get(RoomEvent.ParticipantAttributesChanged)?.(
+      { "lk.agent.state": "thinking" },
+      { identity: "voice-worker-9ea3a1cb" },
+    );
+    await vi.advanceTimersByTimeAsync(40);
+    expect(events.some(([type]) => type === "ended")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(11);
+    expect(events).toContainEqual(["ended", "idle_timeout"]);
+    expect(events.some(([type]) => type === "disconnected")).toBe(false);
+    expect(room.disconnectCount).toBe(1);
+  });
+
+  it("does not extend the absolute fifteen-minute safety ceiling", async () => {
+    vi.useFakeTimers();
+    const { room, events, transport } = setup();
+    await transport.connect({
+      ...session,
+      idleTimeoutSeconds: 0.08,
+      absoluteTimeoutSeconds: 0.1,
+    });
+
+    await vi.advanceTimersByTimeAsync(60);
+    room.handlers.get(RoomEvent.ParticipantAttributesChanged)?.(
+      { "lk.agent.state": "speaking" },
+      { identity: "voice-worker-9ea3a1cb" },
+    );
+    await vi.advanceTimersByTimeAsync(41);
+
+    expect(events).toContainEqual(["ended", "absolute_timeout"]);
+    expect(events.some(([type]) => type === "disconnected")).toBe(false);
+  });
+
+  it("accepts a backend graceful-end reason without reporting a disconnect failure", async () => {
+    const { room, events, transport } = setup();
+    await transport.connect(session);
+    room.handlers.get(RoomEvent.DataReceived)?.(
+      new TextEncoder().encode(JSON.stringify({
+        version: 1,
+        attemptId: session.attemptId,
+        reason: "idle_timeout",
+      })),
+      { identity: "voice-worker-9ea3a1cb" },
+      undefined,
+      "voice-conversation.lifecycle.v1",
+    );
+
+    await Promise.resolve();
+    expect(events).toContainEqual(["ended", "idle_timeout"]);
+    expect(events.some(([type]) => type === "disconnected")).toBe(false);
+  });
+
+  it("still reports an unexpected worker departure as a failure", async () => {
+    const { room, events, transport } = setup();
+    await transport.connect(session);
+
+    room.handlers.get(RoomEvent.ParticipantDisconnected)?.({
+      identity: "voice-worker-9ea3a1cb",
+    });
+    await Promise.resolve();
+
+    expect(events).toContainEqual(["disconnected", null]);
+    expect(events.some(([type]) => type === "ended")).toBe(false);
   });
 });
 
