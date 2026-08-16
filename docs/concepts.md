@@ -111,11 +111,21 @@ application decisions without storing hidden model reasoning.
 
 1. The active speech handle is interrupted.
 2. The unfinished narration beat stays at the presentation cursor.
-3. The final user transcript becomes a logical follow-up turn.
-4. The silent planner chooses one of the question paths above.
-5. The answer is validated and spoken as its own turn.
-6. Pathos waits by default, or resumes after playout when the listener explicitly
-   asked to “answer and continue.”
+3. The application checks whether the final user transcript is a short,
+   standalone continuation command.
+4. “Continue the presentation,” “resume narration,” and other bounded variants
+   restore and replay the preserved beat directly. They do not invoke the
+   planner or create an answer turn.
+5. Otherwise, the transcript becomes a logical follow-up and the silent planner
+   chooses one of the question paths above.
+6. The answer is validated and spoken as its own turn. Pathos waits by default,
+   or resumes after playout when the listener explicitly asked to “answer and
+   continue.”
+
+During follow-up preparation, the browser renders an application-visible path:
+**Understand → Search if needed → Prepare → Answer**. Only stages actually
+published by the application are marked complete; Search is shown as skipped for
+a direct-context answer. This is operational progress, not model chain-of-thought.
 
 Browsing during an answer cancels direct resumption and leaves the presentation
 waiting. Generated phrases such as “let us move on” are never parsed as

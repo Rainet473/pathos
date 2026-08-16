@@ -22,6 +22,10 @@ navigation, evidence validation, and narration commitment.
 - Validates turn citations and deck evidence before generating an answer.
 - Waits after answers by default; explicit “answer and continue” resumes only
   after verified answer playout.
+- Treats short spoken commands such as “continue the presentation” as
+  application-owned continuation, bypassing question planning and search.
+- Shows the observable answer pathway—Understand, optional Search, Prepare,
+  Answer—without exposing hidden model reasoning.
 - Records private local traces for timing, usage, provider-reported cache tokens,
   selected evidence, and application decisions.
 
@@ -83,8 +87,9 @@ See the concise [advantages](docs/advantages.md) and honest
 > Demo video coming soon. Replace this block with the reviewed public recording.
 
 For a repeatable five-minute walkthrough now, use the
-[public demo script](docs/demo-script.md). It covers interruption, grounded
-follow-ups, answer-and-continue, browsing during an answer, and completion.
+[public demo script](docs/demo-script.md). It covers interruption, spoken
+continuation, the answer pathway, grounded follow-ups, answer-and-continue,
+browsing during an answer, and completion.
 
 ## Quick start
 

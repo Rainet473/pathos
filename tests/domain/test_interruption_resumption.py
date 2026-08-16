@@ -107,6 +107,18 @@ def test_explicit_continue_from_waiting_restores_original_slide(deck_payload):
     assert "presentation_resumed" in event_types(events)
 
 
+def test_explicit_continue_from_interrupted_replays_uncommitted_beat(deck_payload):
+    contracts, _, controller = create_interrupted_controller(deck_payload)
+    saved_cursor = controller.state.interrupted_cursor
+
+    events = controller.continue_presentation(turn_id="narration-2")
+
+    assert controller.state.phase is contracts.PresentationPhase.PRESENTING
+    assert controller.state.presentation_cursor == saved_cursor
+    assert controller.state.active_turn_id == "narration-2"
+    assert event_types(events) == ["presentation_resumed", "beat_selected"]
+
+
 def test_interruption_during_answer_keeps_original_resume_cursor(deck_payload):
     contracts, _, controller = create_interrupted_controller(deck_payload)
     saved_cursor = controller.state.interrupted_cursor

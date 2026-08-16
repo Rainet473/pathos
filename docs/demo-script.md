@@ -23,24 +23,31 @@ disconnected: no room, microphone, or model session exists yet.
    > What did you mean by the motorcycle response?
 
    Confirm that the unfinished narration beat remains uncommitted and the answer
-   uses the retained conversation.
-3. Ask a cross-slide question with explicit continuation:
+   uses the retained conversation. Point out the answer pathway as Understand,
+   optional Search, Prepare, and Answer light in sequence.
+3. After the answer leaves the presentation waiting, say:
+
+   > Continue with the presentation.
+
+   Confirm that narration restores the semantic slide and preserved beat without
+   entering follow-up planning or speaking an answer to the command.
+4. Ask a cross-slide question with explicit continuation:
 
    > Explain ABS, then continue your presentation.
 
    Confirm that the braking slide appears for the answer, then the semantic slide
    restores and the preserved narration beat resumes after answer audio finishes.
-4. During a later answer, select another slide with Previous, Next, or the slide
+5. During a later answer, select another slide with Previous, Next, or the slide
    picker. Confirm that the answer stops, the selected slide remains visible, and
    the presentation waits. Select **Continue presentation** and confirm that the
    semantic slide restores and narration resumes—not the abandoned answer.
-5. Ask a related but unsupported question:
+6. Ask a related but unsupported question:
 
    > Explain AWS, then continue your presentation.
 
    Confirm that the application discloses the presentation boundary rather than
    pretending the answer is grounded in the deck.
-6. Let the presentation reach the final slide and complete. Browse to an earlier
+7. Let the presentation reach the final slide and complete. Browse to an earlier
    slide and confirm that the semantic cursor remains at the completed final beat.
 
 ## Success rubric
@@ -50,6 +57,10 @@ disconnected: no room, microphone, or model session exists yet.
 - Visible slides may change without moving the semantic cursor.
 - Default answers wait; explicit answer-and-continue resumes only after answer
   playout.
+- A standalone spoken Continue command bypasses answer planning and replays the
+  preserved beat.
+- The highlighted answer-path nodes match the stages actually followed; Search
+  is skipped when current context is sufficient.
 - The transcript, scope/source disclosure, domain events, and timing cards remain
   coherent with what was heard.
 - No credentials or `.runtime` logs appear in the recording or repository.

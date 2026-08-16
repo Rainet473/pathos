@@ -1331,6 +1331,186 @@ def test_bridge_answer_and_continue_schedules_same_beat_with_new_turn():
 
 
 @pytest.mark.offline
+def test_spoken_continue_from_interrupted_bypasses_answer_preparation():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        agent_constructor = RecordingPresentationAgentConstructor()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=_application_session(),
+            presentation_agent_constructor=agent_constructor,
+            http_context_factory=NullAsyncContext,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = type("Participant", (), {"identity": _spec().browser_identity})()
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        original_cursor = _updates(room)[-1].view.state.presentation_cursor
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+        narration_handle.finish(interrupted=True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert _updates(room)[-1].view.state.phase is PresentationPhase.INTERRUPTED
+
+        prepare_user_turn = agent_constructor.calls[0]["prepare_user_turn"]
+        instructions = await prepare_user_turn(
+            "Please resume the narration.",
+            "provider-user-resume-1",
+        )
+
+        assert instructions is None
+        assert len(agent_session.generated) == 2
+        resumed = _updates(room)[-1]
+        assert resumed.view.state.phase is PresentationPhase.PRESENTING
+        assert resumed.view.state.presentation_cursor == original_cursor
+        assert resumed.view.state.active_playout is None
+        assert [event.type.value for event in resumed.view.events] == [
+            "presentation_resumed",
+            "beat_selected",
+        ]
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_spoken_continue_from_waiting_skips_a_second_answer_turn():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        agent_constructor = RecordingPresentationAgentConstructor()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=_application_session(),
+            presentation_agent_constructor=agent_constructor,
+            http_context_factory=NullAsyncContext,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = type("Participant", (), {"identity": _spec().browser_identity})()
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+        narration_handle.finish(interrupted=True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        prepare_user_turn = agent_constructor.calls[0]["prepare_user_turn"]
+        answer_instructions = await prepare_user_turn(
+            "Why does engine braking feel stronger in a low gear?",
+            "provider-user-question-1",
+        )
+        assert answer_instructions is not None
+        answer_handle = FakeSpeechHandle("speech-answer")
+        agent_session.handlers["speech_created"](
+            type("Speech", (), {"speech_handle": answer_handle})()
+        )
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+        answer_handle.finish()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert _updates(room)[-1].view.state.phase is PresentationPhase.WAITING
+
+        instructions = await prepare_user_turn(
+            "Continue with the presentation.",
+            "provider-user-resume-2",
+        )
+
+        assert instructions is None
+        assert len(agent_session.generated) == 2
+        assert _updates(room)[-1].view.state.phase is PresentationPhase.PRESENTING
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_spoken_continue_does_not_restart_a_completed_deck():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        agent_constructor = RecordingPresentationAgentConstructor()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=_application_session(),
+            presentation_agent_constructor=agent_constructor,
+            http_context_factory=NullAsyncContext,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = type("Participant", (), {"identity": _spec().browser_identity})()
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["agent_state_changed"](
+            type("State", (), {"old_state": "thinking", "new_state": "speaking"})()
+        )
+        narration_handle.finish()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert _updates(room)[-1].view.state.phase is PresentationPhase.COMPLETED
+
+        prepare_user_turn = agent_constructor.calls[0]["prepare_user_turn"]
+        instructions = await prepare_user_turn(
+            "Continue the presentation.",
+            "provider-user-after-completion",
+        )
+
+        assert instructions is not None
+        assert len(agent_session.generated) == 1
+        assert _updates(room)[-1].view.state.phase is PresentationPhase.ANSWERING
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
 def test_bridge_answers_question_received_just_after_presentation_completion():
     from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
 

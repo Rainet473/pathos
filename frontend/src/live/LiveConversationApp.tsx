@@ -18,6 +18,7 @@ import {
   planningStatusDescription,
   planningStatusLabel,
 } from "./planningStatus";
+import { answerPathNodes, type AnswerPathNode } from "./planningPath";
 
 export default function LiveConversationApp() {
   const [state, dispatch] = useReducer(reduceLiveState, undefined, initialLiveState);
@@ -203,6 +204,7 @@ export default function LiveConversationApp() {
   const applicationStatusDescription = snapshot.planningStage
     ? planningStatusDescription(snapshot.planningStage)
     : presentationPhaseDescription(presentationPhase);
+  const pathwayNodes = answerPathNodes(state.answerPath);
 
   return (
     <main className="presentation-shell live-presentation-shell">
@@ -306,6 +308,9 @@ export default function LiveConversationApp() {
               <strong>{applicationStatusLabel}</strong>
             </div>
           </div>
+          {state.answerPath.activeStep ? (
+            <AnswerPathway nodes={pathwayNodes} />
+          ) : null}
           <dl className="state-grid">
             <div><dt>Visible slide</dt><dd>{snapshot.state.visibleSlideId}</dd></div>
             <div><dt>Presentation cursor</dt><dd>{snapshot.state.presentationCursor.slideId} · beat {snapshot.state.presentationCursor.beatIndex + 1}</dd></div>
@@ -404,6 +409,48 @@ export default function LiveConversationApp() {
       </section>
       {state.attemptId ? <code className="attempt live-attempt">Attempt {state.attemptId}</code> : null}
     </main>
+  );
+}
+
+const ANSWER_PATH_LABELS = {
+  understanding: "Understand",
+  searching: "Search if needed",
+  preparing: "Prepare",
+  answering: "Answer",
+} as const;
+
+const ANSWER_PATH_STATUS = {
+  complete: "Done",
+  active: "Active",
+  skipped: "Skipped",
+  pending: "Next",
+} as const;
+
+function AnswerPathway({ nodes }: { nodes: AnswerPathNode[] }) {
+  return (
+    <section className="answer-pathway" aria-label="Answer pathway" aria-live="polite">
+      <div className="answer-pathway-heading">
+        <small>Answer pathway</small>
+        <span>Application-visible progress</span>
+      </div>
+      <ol className="answer-pathway-list">
+        {nodes.map((node, index) => (
+          <li
+            key={node.step}
+            className={`pathway-step is-${node.status}`}
+            aria-current={node.status === "active" ? "step" : undefined}
+          >
+            <span className="pathway-node" aria-hidden="true">
+              {node.status === "complete" ? "✓" : index + 1}
+            </span>
+            <span className="pathway-copy">
+              <strong>{ANSWER_PATH_LABELS[node.step]}</strong>
+              <small>{ANSWER_PATH_STATUS[node.status]}</small>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 

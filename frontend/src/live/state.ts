@@ -2,6 +2,11 @@ import type { VoiceBackendIdentity } from "./protocol";
 import type { ConversationDiagnosticEvent } from "./diagnostics";
 import type { LivePresentationView, PresentationStateUpdate } from "./presentation";
 import type { LiveSessionEndReason } from "./lifecycle";
+import {
+  advanceAnswerPath,
+  emptyAnswerPath,
+  type AnswerPathState,
+} from "./planningPath";
 
 export type LivePhase =
   | "idle"
@@ -28,6 +33,7 @@ export interface LiveState {
   backend: VoiceBackendIdentity | null;
   transcript: TranscriptEntry[];
   presentation: LivePresentationView | null;
+  answerPath: AnswerPathState;
   failure: string | null;
   endReason: LiveSessionEndReason | null;
   needsAudioUnlock: boolean;
@@ -65,6 +71,7 @@ export function initialLiveState(): LiveState {
     backend: null,
     transcript: [],
     presentation: null,
+    answerPath: emptyAnswerPath(),
     failure: null,
     endReason: null,
     needsAudioUnlock: false,
@@ -86,6 +93,7 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
       backend: null,
       transcript: [],
       presentation: null,
+      answerPath: emptyAnswerPath(),
       failure: null,
       endReason: null,
       needsAudioUnlock: false,
@@ -135,7 +143,15 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
       ) {
         return state;
       }
-      return { ...state, presentation: action.update.view };
+      return {
+        ...state,
+        presentation: action.update.view,
+        answerPath: advanceAnswerPath(
+          state.answerPath,
+          action.update.view.planningStage,
+          action.update.view.state.phase,
+        ),
+      };
     case "audio_playback_blocked":
       return { ...state, needsAudioUnlock: true };
     case "audio_playback_unlocked":
@@ -143,13 +159,20 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
     case "stopped":
       return ["stopped", "failure"].includes(state.phase)
         ? state
-        : { ...state, phase: "stopped", endReason: null, needsAudioUnlock: false };
+        : {
+            ...state,
+            phase: "stopped",
+            answerPath: emptyAnswerPath(),
+            endReason: null,
+            needsAudioUnlock: false,
+          };
     case "ended":
       return ["stopped", "failure"].includes(state.phase)
         ? state
         : {
             ...state,
             phase: "stopped",
+            answerPath: emptyAnswerPath(),
             endReason: action.reason,
             needsAudioUnlock: false,
           };
@@ -159,6 +182,7 @@ export function reduceLiveState(state: LiveState, action: LiveAction): LiveState
         : {
             ...state,
             phase: "failure",
+            answerPath: emptyAnswerPath(),
             failure: action.reason,
             needsAudioUnlock: false,
           };

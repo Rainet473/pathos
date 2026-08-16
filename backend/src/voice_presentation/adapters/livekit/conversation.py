@@ -32,6 +32,10 @@ from voice_presentation.application.live_presentation import (
     GenerationDirective,
     PresentationActionResult,
 )
+from voice_presentation.application.spoken_commands import (
+    is_spoken_continue_command,
+)
+from voice_presentation.domain.contracts import PresentationPhase
 from voice_presentation.domain.reasoning import PlanningStage, PlanningStatus
 from voice_presentation.transport.conversation import ConversationSessionSpec
 from voice_presentation.transport.context_trace import (
@@ -578,6 +582,21 @@ class LiveKitConversationSession:
                     binding.started = True
                     await self._publish_presentation(started)
                 await self._settle_binding_locked(binding, interrupted=True)
+
+            phase = self._presentation_session.view().state.phase
+            if (
+                phase
+                in {
+                    PresentationPhase.INTERRUPTED,
+                    PresentationPhase.WAITING,
+                }
+                and is_spoken_continue_command(question)
+            ):
+                result = self._presentation_session.continue_presentation()
+                await self._publish_presentation(result)
+                if result.generation is not None:
+                    self._execute_generation(result.generation)
+                return None
 
             if self._follow_up_planner is None:
                 result = self._presentation_session.prepare_question(question)

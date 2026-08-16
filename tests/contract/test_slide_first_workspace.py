@@ -54,3 +54,17 @@ def test_css_prioritizes_the_stage_and_collapses_secondary_evidence_on_narrow_sc
     assert "overflow-x: auto" in styles
     assert ".workspace-events" in styles
     assert "display: none" in styles
+
+
+def test_inspector_renders_a_connected_observable_answer_pathway():
+    app = APP.read_text(encoding="utf-8")
+    styles = STYLES.read_text(encoding="utf-8")
+
+    assert "<AnswerPathway" in app
+    assert 'aria-label="Answer pathway"' in app
+    assert "Search if needed" in app
+    assert 'className={`pathway-step is-${node.status}`}' in app
+    assert ".answer-pathway" in styles
+    assert ".pathway-step::after" in styles
+    assert ".pathway-step.is-active" in styles
+    assert "box-shadow" in styles

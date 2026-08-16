@@ -70,6 +70,11 @@ across provider turns. Authored terminology hints handle bounded cases such as
 `ABS` versus `A B S` and can request clarification for one plausible neighbor,
 but arbitrary correction would risk silently changing user intent.
 
+Standalone voice continuation uses a deliberately bounded command grammar.
+Common forms such as “continue the presentation,” “resume narration,” and “go
+on” work while interrupted or waiting; an unusual transcription may remain a
+follow-up instead. The Continue button remains the deterministic fallback.
+
 The transcript preserves actual provider text; it does not invent missing words
 to make an interrupted sentence look complete.
 

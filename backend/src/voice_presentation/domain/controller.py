@@ -319,7 +319,11 @@ class PresentationController:
 
     def continue_presentation(self, *, turn_id: str) -> tuple[DomainEvent, ...]:
         turn_id = self._turn_id(turn_id)
-        self._require_phase("continue_presentation", PresentationPhase.WAITING)
+        self._require_phase(
+            "continue_presentation",
+            PresentationPhase.INTERRUPTED,
+            PresentationPhase.WAITING,
+        )
         cursor = self.state.interrupted_cursor or self.state.presentation_cursor
         events = self._restore_slide_events(cursor)
         self.state.phase = PresentationPhase.PRESENTING
