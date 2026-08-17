@@ -82,7 +82,7 @@ See the concise [advantages](docs/advantages.md) and honest
 
 ## Demo
 
-[![Watch the Pathos interruption and continuation demo](docs/assets/pathos-readme-demo-poster.jpg)](docs/assets/pathos-readme-demo.mp4)
+https://github.com/user-attachments/assets/b0875b1a-2ebb-4bfe-86f8-0afd839ceccf
 
 > **Watch the 24-second demo:** Pathos answers an interruption, exposes the
 > active reasoning path, restores the semantic presentation cursor after a
