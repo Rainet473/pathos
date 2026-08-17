@@ -16,10 +16,12 @@ from voice_presentation.domain.contracts import PresentationPhase, ScopeMode
 from voice_presentation.domain.controller import PresentationController
 from voice_presentation.domain.provenance import GroundingSource
 from voice_presentation.domain.reasoning import (
+    PresentationActionKind,
     PlanningRejectionCode,
     PlanningStatus,
     SearchMaterialInput,
     SubmitAnswerPlanInput,
+    SubmitPresentationActionInput,
 )
 from voice_presentation.transport.context_trace import (
     ApplicationDecisionTrace,
@@ -128,6 +130,248 @@ def test_planning_never_mutates_presentation_controller_state():
     assert controller.state.phase is PresentationPhase.READY
 
 
+def test_valid_presentation_evidence_survives_invalid_optional_citations():
+    snapshot = _context_snapshot()
+    context = _case("material-search").context
+    session = FollowUpPlanningSession(
+        deck=_deck(),
+        provenance=snapshot.ledger,
+        context=context,
+    )
+    search = session.search(
+        SearchMaterialInput(
+            keywords=("clutch", "friction zone"),
+            slide_ids=("clutch-and-gears",),
+            max_results=1,
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+    evidence = search.hits[0]
+
+    accepted = session.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief=(
+                "Explain the friction zone from the retained presentation evidence."
+            ),
+            supporting_turn_ids=(context.follow_up_turn_id,),
+            evidence_ids=(evidence.evidence_id,),
+            supporting_slide_ids=(evidence.slide_id,),
+            focus_slide_id="invented-slide",
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+
+    assert accepted.scope is ScopeMode.GROUNDED
+    assert accepted.grounding_source is GroundingSource.PRESENTATION
+    assert accepted.answer_brief == (
+        "Explain the friction zone from the retained presentation evidence."
+    )
+    assert accepted.supporting_turn_ids == ()
+    assert accepted.evidence_ids == (evidence.evidence_id,)
+    assert accepted.supporting_slide_ids == (evidence.slide_id,)
+    assert accepted.focus_slide_id == evidence.slide_id
+    report = session.snapshot.citation_filter
+    assert report is not None
+    assert report.removed_ineligible_turn_ids == (context.follow_up_turn_id,)
+    assert report.removed_unknown_slide_ids == ()
+    assert report.removed_focus_slide_id == "invented-slide"
+    assert report.normalized_focus_slide_id == evidence.slide_id
+    assert report.derived_slide_ids_from_evidence == ()
+
+
+def test_parseable_evidence_id_recovers_a_valid_slide_and_packaged_support():
+    context = _case("material-search").context
+    session = FollowUpPlanningSession(
+        deck=_deck(),
+        provenance=_context_snapshot().ledger,
+        context=context,
+    )
+    hallucinated_segment = "motorcycle-controls.engine-braking.narration.999"
+
+    accepted = session.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief=(
+                "Explain engine braking from the packaged engine-braking slide."
+            ),
+            evidence_ids=(hallucinated_segment,),
+            supporting_slide_ids=("engine brakes",),
+            focus_slide_id="engine brakes",
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+
+    assert accepted.scope is ScopeMode.GROUNDED
+    assert accepted.grounding_source is GroundingSource.PRESENTATION
+    assert accepted.supporting_slide_ids == ("engine-braking",)
+    assert accepted.focus_slide_id == "engine-braking"
+    assert accepted.evidence_ids == (
+        "motorcycle-controls.engine-braking.summary.0",
+    )
+    report = session.snapshot.citation_filter
+    assert report is not None
+    assert report.removed_evidence_ids == (hallucinated_segment,)
+    assert report.removed_unknown_slide_ids == ("engine brakes",)
+    assert report.derived_slide_ids_from_evidence == ("engine-braking",)
+    assert report.derived_evidence_ids_from_slides == (
+        "motorcycle-controls.engine-braking.summary.0",
+    )
+
+
+def test_valid_slide_only_recovers_bounded_packaged_support():
+    context = _case("material-search").context
+    session = FollowUpPlanningSession(
+        deck=_deck(),
+        provenance=_context_snapshot().ledger,
+        context=context,
+    )
+
+    accepted = session.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief="Explain ABS from the verified packaged slide.",
+            supporting_slide_ids=("braking-abs",),
+            focus_slide_id="braking-abs",
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+
+    assert accepted.scope is ScopeMode.GROUNDED
+    assert accepted.grounding_source is GroundingSource.PRESENTATION
+    assert accepted.supporting_slide_ids == ("braking-abs",)
+    assert accepted.focus_slide_id == "braking-abs"
+    assert accepted.evidence_ids == (
+        "motorcycle-controls.braking-abs.summary.0",
+    )
+    report = session.snapshot.citation_filter
+    assert report is not None
+    assert report.derived_evidence_ids_from_slides == accepted.evidence_ids
+
+
+def test_combined_grounding_narrows_to_valid_presentation_support():
+    snapshot = _context_snapshot()
+    context = _case("material-search").context
+    session = FollowUpPlanningSession(
+        deck=_deck(),
+        provenance=snapshot.ledger,
+        context=context,
+    )
+    evidence = session.search(
+        SearchMaterialInput(
+            keywords=("clutch",),
+            slide_ids=("clutch-and-gears",),
+            max_results=1,
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    ).hits[0]
+
+    accepted = session.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.CONVERSATION_AND_PRESENTATION,
+            answer_brief="Preserve the grounded deck answer after filtering.",
+            evidence_ids=(evidence.evidence_id,),
+            supporting_slide_ids=(evidence.slide_id,),
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+
+    assert accepted.scope is ScopeMode.GROUNDED
+    assert accepted.grounding_source is GroundingSource.PRESENTATION
+    assert accepted.supporting_turn_ids == ()
+    assert accepted.evidence_ids == (evidence.evidence_id,)
+    report = session.snapshot.citation_filter
+    assert report is not None
+    assert report.original_grounding_source is (
+        GroundingSource.CONVERSATION_AND_PRESENTATION
+    )
+    assert report.normalized_grounding_source is GroundingSource.PRESENTATION
+
+
+def test_extended_knowledge_preserves_model_decision_while_filtering_citations():
+    context = _case("material-search").context
+    session = FollowUpPlanningSession(
+        deck=_deck(),
+        provenance=_context_snapshot().ledger,
+        context=context,
+    )
+
+    accepted = session.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.EXTENDED_KNOWLEDGE,
+            grounding_source=GroundingSource.MODEL_KNOWLEDGE,
+            answer_brief="Explain the related concept from disclosed model knowledge.",
+            supporting_turn_ids=(context.follow_up_turn_id,),
+            evidence_ids=("unparseable-evidence",),
+            supporting_slide_ids=("missing-slide",),
+            focus_slide_id="missing-focus",
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+
+    assert accepted.scope is ScopeMode.EXTENDED_KNOWLEDGE
+    assert accepted.answer_brief == (
+        "Explain the related concept from disclosed model knowledge."
+    )
+    assert accepted.supporting_turn_ids == ()
+    assert accepted.evidence_ids == ()
+    assert accepted.supporting_slide_ids == ()
+    assert accepted.focus_slide_id is None
+    report = session.snapshot.citation_filter
+    assert report is not None
+    assert report.removed_ineligible_turn_ids == (context.follow_up_turn_id,)
+    assert report.removed_evidence_ids == ("unparseable-evidence",)
+    assert report.removed_unknown_slide_ids == ("missing-slide",)
+    assert report.removed_focus_slide_id == "missing-focus"
+
+
+def test_standalone_continue_is_a_terminal_action_not_an_answer_plan():
+    deck = _deck()
+    controller = PresentationController(deck)
+    before = controller.state.model_copy(deep=True)
+    context = _case("conversation-citation").context
+    session = FollowUpPlanningSession(
+        deck=deck,
+        provenance=_context_snapshot().ledger,
+        context=context,
+    )
+
+    accepted = session.submit_action(
+        SubmitPresentationActionInput(
+            action=PresentationActionKind.CONTINUE_PRESENTATION,
+        ),
+        session_version=context.session_version,
+        follow_up_turn_id=context.follow_up_turn_id,
+    )
+
+    assert accepted.action is PresentationActionKind.CONTINUE_PRESENTATION
+    assert accepted.follow_up_turn_id == context.follow_up_turn_id
+    assert accepted.session_version == context.session_version
+    assert session.snapshot.status is PlanningStatus.ACCEPTED
+    assert session.snapshot.accepted_action == accepted
+    assert session.snapshot.accepted_plan is None
+    assert controller.state == before
+
+    with pytest.raises(PlanningProtocolError) as caught:
+        session.submit(
+            _conversation_plan(),
+            session_version=context.session_version,
+            follow_up_turn_id=context.follow_up_turn_id,
+        )
+    assert caught.value.code is PlanningRejectionCode.DUPLICATE_TERMINAL
+
+
 @pytest.mark.parametrize(
     ("plan", "code"),
     [
@@ -144,21 +388,10 @@ def test_planning_never_mutates_presentation_controller_state():
             SubmitAnswerPlanInput(
                 scope=ScopeMode.GROUNDED,
                 grounding_source=GroundingSource.PRESENTATION,
-                answer_brief="Cite evidence that was never searched.",
-                evidence_ids=("motorcycle-controls.clutch-and-gears.narration.1",),
-                supporting_slide_ids=("clutch-and-gears",),
+                answer_brief="Cite unparseable evidence with no other support.",
+                evidence_ids=("unparseable-evidence",),
             ),
             PlanningRejectionCode.UNKNOWN_EVIDENCE,
-        ),
-        (
-            SubmitAnswerPlanInput(
-                scope=ScopeMode.GROUNDED,
-                grounding_source=GroundingSource.CONVERSATION,
-                answer_brief="Cite an unknown slide.",
-                supporting_turn_ids=("narration-0002",),
-                supporting_slide_ids=("missing-slide",),
-            ),
-            PlanningRejectionCode.UNKNOWN_SLIDE,
         ),
         (
             SubmitAnswerPlanInput(
@@ -168,17 +401,6 @@ def test_planning_never_mutates_presentation_controller_state():
                 supporting_turn_ids=("answer-0004",),
             ),
             PlanningRejectionCode.INELIGIBLE_TURN,
-        ),
-        (
-            SubmitAnswerPlanInput(
-                scope=ScopeMode.GROUNDED,
-                grounding_source=GroundingSource.CONVERSATION,
-                answer_brief="Propose an unrelated focus slide.",
-                supporting_turn_ids=("narration-0002",),
-                supporting_slide_ids=("braking-abs",),
-                focus_slide_id="braking-abs",
-            ),
-            PlanningRejectionCode.INCOHERENT_PLAN,
         ),
     ],
 )
@@ -246,7 +468,7 @@ def test_explicit_current_slide_evidence_can_ground_a_zero_search_plan():
     assert session.snapshot.search_calls == 0
 
 
-def test_evidence_is_scoped_to_the_same_planning_session():
+def test_historical_evidence_is_not_trusted_but_can_recover_its_packaged_slide():
     snapshot = _context_snapshot()
     search_case = _case("material-search")
     first = FollowUpPlanningSession(
@@ -270,19 +492,25 @@ def test_evidence_is_scoped_to_the_same_planning_session():
         provenance=snapshot.ledger,
         context=search_case.context,
     )
-    with pytest.raises(PlanningProtocolError) as caught:
-        second.submit(
-            SubmitAnswerPlanInput(
-                scope=ScopeMode.GROUNDED,
-                grounding_source=GroundingSource.PRESENTATION,
-                answer_brief="Attempt to reuse another planning turn's evidence.",
-                evidence_ids=(evidence_id,),
-                supporting_slide_ids=("clutch-and-gears",),
-            ),
-            session_version=10,
-            follow_up_turn_id="user-follow-up-0007",
-        )
-    assert caught.value.code is PlanningRejectionCode.UNKNOWN_EVIDENCE
+    accepted = second.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief="Use the verified slide rather than historical evidence.",
+            evidence_ids=(evidence_id,),
+            supporting_slide_ids=("clutch-and-gears",),
+        ),
+        session_version=10,
+        follow_up_turn_id="user-follow-up-0007",
+    )
+
+    assert accepted.evidence_ids == (
+        "motorcycle-controls.clutch-and-gears.summary.0",
+    )
+    assert accepted.evidence_ids != (evidence_id,)
+    report = second.snapshot.citation_filter
+    assert report is not None
+    assert report.removed_evidence_ids == (evidence_id,)
 
 
 def test_combined_grounding_requires_and_accepts_both_support_kinds():
@@ -596,9 +824,8 @@ def test_harness_rejects_missing_terminal_and_records_rejected_plan_decision():
     invalid_plan = SubmitAnswerPlanInput(
         scope=ScopeMode.GROUNDED,
         grounding_source=GroundingSource.PRESENTATION,
-        answer_brief="Cite evidence that was not searched in this planning turn.",
-        evidence_ids=("motorcycle-controls.clutch-and-gears.narration.1",),
-        supporting_slide_ids=("clutch-and-gears",),
+        answer_brief="Cite unparseable evidence with no valid support.",
+        evidence_ids=("unparseable-evidence",),
     )
     rejected_action = material_case.actions[1].model_copy(
         update={"input": invalid_plan}

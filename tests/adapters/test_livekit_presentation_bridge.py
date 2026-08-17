@@ -15,11 +15,13 @@ from voice_presentation.content.repository import JsonMaterialRepository
 from voice_presentation.domain.contracts import PlayoutPurpose, PresentationPhase
 from voice_presentation.domain.provenance import GroundingSource
 from voice_presentation.domain.reasoning import (
+    PresentationActionKind,
     PlanningRejectionCode,
     PlanningSnapshot,
     PlanningStage,
     PlanningStatus,
     ValidatedAnswerPlan,
+    ValidatedPresentationAction,
 )
 from voice_presentation.transport.presentation import (
     PRESENTATION_COMMAND_TOPIC,
@@ -40,6 +42,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ONE_SLIDE_FIXTURE = (
     REPOSITORY_ROOT / "tests" / "fixtures" / "one-slide-presentation.json"
 )
+DECK_PATH = REPOSITORY_ROOT / "assets/motorcycle-controls/slide-breakdown.json"
 BACKEND = VoiceBackendIdentity(
     provider=VoiceProvider.LIVEKIT_INFERENCE_PIPELINE,
     kind=VoiceBackendKind.PIPELINE,
@@ -209,6 +212,35 @@ class FakeAcceptedPlanner:
         self.close_count += 1
 
 
+class FakeContinueActionPlanner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def plan(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        context = kwargs["context"]
+        await kwargs["on_stage"](PlanningStage.PREPARING)
+        return SimpleNamespace(
+            snapshot=PlanningSnapshot(
+                status=PlanningStatus.ACCEPTED,
+                tool_steps=1,
+                search_calls=0,
+                accepted_action=ValidatedPresentationAction(
+                    action_id="presentation-action-live-1",
+                    follow_up_turn_id=context.follow_up_turn_id,
+                    session_version=context.session_version,
+                    action=PresentationActionKind.CONTINUE_PRESENTATION,
+                ),
+            ),
+            requests=(),
+            trace=(),
+            failure_code=None,
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
 class FakeRejectedPlanner:
     async def plan(self, **kwargs: object) -> object:
         del kwargs
@@ -299,6 +331,11 @@ def _spec():
 
 def _application_session() -> ApplicationPresentationSession:
     deck = JsonMaterialRepository(ONE_SLIDE_FIXTURE).load()
+    return ApplicationPresentationSession(deck, session_id=_spec().attempt_id)
+
+
+def _multi_beat_application_session() -> ApplicationPresentationSession:
+    deck = JsonMaterialRepository(DECK_PATH).load()
     return ApplicationPresentationSession(deck, session_id=_spec().attempt_id)
 
 
@@ -1323,6 +1360,98 @@ def test_bridge_answer_and_continue_schedules_same_beat_with_new_turn():
         assert updates[-1].view.state.phase is PresentationPhase.PRESENTING
         assert updates[-1].view.state.presentation_cursor.beat_index == 0
         assert updates[-1].view.committed_beats == ()
+
+        room.handlers["participant_disconnected"](browser)
+        await asyncio.wait_for(task, timeout=0.1)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.offline
+def test_model_continue_action_resumes_and_keeps_narrating_after_the_saved_beat():
+    from voice_presentation.adapters.livekit.conversation import LiveKitConversationSession
+
+    async def scenario() -> None:
+        room = FakeRoom()
+        agent_session = FakeAgentSession()
+        agent_constructor = RecordingPresentationAgentConstructor()
+        planner = FakeContinueActionPlanner()
+        runner = LiveKitConversationSession(
+            _spec(),
+            voice_session_factory=FakeVoiceSessionFactory(agent_session),
+            room=room,
+            presentation_session=_multi_beat_application_session(),
+            presentation_agent_constructor=agent_constructor,
+            follow_up_planner=planner,
+            http_context_factory=NullAsyncContext,
+            idle_timeout_seconds=1,
+            absolute_timeout_seconds=1,
+        )
+        ready = asyncio.Event()
+        task = asyncio.create_task(runner.run(ready))
+        await asyncio.wait_for(ready.wait(), timeout=0.1)
+        browser = type("Participant", (), {"identity": _spec().browser_identity})()
+        room.handlers["participant_connected"](browser)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        original_cursor = _updates(room)[-1].view.state.presentation_cursor
+        narration_handle = runner.active_speech_handle
+        assert narration_handle is not None
+        agent_session.handlers["conversation_item_added"](
+            SimpleNamespace(
+                item=SimpleNamespace(
+                    id="provider-narration-natural-continue",
+                    role="assistant",
+                    text_content=(
+                        "Motorcycle controls form a continuous loop of rider input "
+                        "and machine response."
+                    ),
+                    interrupted=True,
+                    metrics=None,
+                )
+            )
+        )
+        agent_session.handlers["agent_state_changed"](
+            SimpleNamespace(old_state="thinking", new_state="speaking")
+        )
+        narration_handle.finish(interrupted=True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        prepare_user_turn = agent_constructor.calls[0]["prepare_user_turn"]
+        instructions = await prepare_user_turn(
+            "Would you carry on with the presentation from there?",
+            "provider-user-natural-continue",
+        )
+
+        assert instructions is None
+        assert len(planner.calls) == 1
+        assert len(agent_session.generated) == 2
+        resumed = _updates(room)[-1]
+        assert resumed.view.state.phase is PresentationPhase.PRESENTING
+        assert resumed.view.state.presentation_cursor == original_cursor
+        assert resumed.view.planning_stage is None
+        assert all(
+            event.type.value != "question_classified"
+            for update in _updates(room)
+            for event in update.view.events
+        )
+
+        resumed_handle = runner.active_speech_handle
+        assert resumed_handle is not None
+        agent_session.handlers["agent_state_changed"](
+            SimpleNamespace(old_state="thinking", new_state="speaking")
+        )
+        resumed_handle.finish()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert len(agent_session.generated) == 3
+        following = _updates(room)[-1]
+        assert following.view.state.phase is PresentationPhase.PRESENTING
+        assert following.view.state.presentation_cursor.beat_index == 1
+        assert following.view.committed_beats == (original_cursor,)
 
         room.handlers["participant_disconnected"](browser)
         await asyncio.wait_for(task, timeout=0.1)

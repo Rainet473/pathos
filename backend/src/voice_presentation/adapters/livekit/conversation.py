@@ -708,9 +708,10 @@ class LiveKitConversationSession:
             )
             self._context_trace.record_planning_trace(run.trace)
             accepted_plan = run.snapshot.accepted_plan
+            accepted_action = run.snapshot.accepted_action
             if (
                 run.snapshot.status is not PlanningStatus.ACCEPTED
-                or accepted_plan is None
+                or (accepted_plan is None and accepted_action is None)
             ):
                 failure_code = (
                     run.failure_code.value
@@ -743,6 +744,26 @@ class LiveKitConversationSession:
                 )
                 return recovered.generation.instructions
 
+            if accepted_action is not None:
+                try:
+                    result = self._presentation_session.accept_presentation_action(
+                        accepted_action
+                    )
+                except ValueError:
+                    await self._fail_follow_up_planning(
+                        planning,
+                        reason_code="ineligible_action",
+                    )
+                    return None
+                if result.generation is None:
+                    raise RuntimeError(
+                        "accepted presentation action did not issue narration"
+                    )
+                await self._publish_presentation(result)
+                self._execute_generation(result.generation)
+                return None
+
+            assert accepted_plan is not None
             result = self._presentation_session.accept_answer_plan(
                 accepted_plan,
                 provenance=snapshot.ledger,

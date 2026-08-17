@@ -6,51 +6,27 @@ import re
 
 
 _WORD_SPACE = re.compile(r"[^a-z0-9]+")
-_DISCOURSE_PREFIXES = frozenset({"alright", "okay", "ok", "please", "yes"})
-_POLITE_SUFFIXES = frozenset({"now", "please", "thanks"})
-_CONTINUE_COMMANDS = frozenset(
-    {
-        "continue",
-        "continue narration",
-        "continue presentation",
-        "continue presenting",
-        "continue speaking",
-        "continue the narration",
-        "continue the presentation",
-        "continue with narration",
-        "continue with presentation",
-        "continue with the narration",
-        "continue with the presentation",
-        "continue your narration",
-        "continue your presentation",
-        "resume",
-        "resume narration",
-        "resume presentation",
-        "resume presenting",
-        "resume the narration",
-        "resume the presentation",
-        "resume your narration",
-        "resume your presentation",
-        "go on",
-        "carry on",
-        "proceed",
-        "proceed with narration",
-        "proceed with presentation",
-        "proceed with the narration",
-        "proceed with the presentation",
-    }
+_DISCOURSE_PREFIX = (
+    r"(?:(?:alright|okay|ok|please|yes|yeah|sounds good|that sounds good)\s+)*"
+)
+_POLITE_SUFFIX = r"(?:\s+(?:then|now|please|thanks|thank you))*"
+_PRESENTATION_TARGET = r"(?:(?:the|your|our)\s+)?(?:presentation|narration)"
+
+# The connector grammar intentionally allows at most the three useful words in
+# phrases such as "continue on with the presentation". An unrestricted wildcard
+# would also accept unsafe compounds such as "continue searching the presentation".
+_CONTINUE_COMMAND = re.compile(
+    rf"^{_DISCOURSE_PREFIX}(?:"
+    rf"continue(?:\s+(?:presenting|speaking)|(?:\s+on)?(?:\s+with)?\s+{_PRESENTATION_TARGET})?"
+    rf"|resume(?:\s+(?:presenting|speaking)|(?:\s+with)?\s+{_PRESENTATION_TARGET})?"
+    rf"|(?:go|carry)\s+on(?:\s+with\s+{_PRESENTATION_TARGET})?"
+    rf"|proceed(?:\s+with\s+{_PRESENTATION_TARGET})?"
+    rf"){_POLITE_SUFFIX}$"
 )
 
 
 def is_spoken_continue_command(transcript: str) -> bool:
     """Return true only for a short standalone presentation-resume command."""
 
-    words = _WORD_SPACE.sub(" ", transcript.lower()).strip().split()
-    while words and words[0] in _DISCOURSE_PREFIXES:
-        words.pop(0)
-    while words and words[-1] in _POLITE_SUFFIXES:
-        words.pop()
-    if words[-2:] == ["thank", "you"]:
-        del words[-2:]
-    return " ".join(words) in _CONTINUE_COMMANDS
-
+    normalized = _WORD_SPACE.sub(" ", transcript.lower()).strip()
+    return _CONTINUE_COMMAND.fullmatch(normalized) is not None

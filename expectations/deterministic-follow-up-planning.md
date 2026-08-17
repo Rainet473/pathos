@@ -49,9 +49,10 @@ plain follow-up + logical-turn ledger + active deck/session snapshot
   and three total tool steps.
 - Every cited logical turn resolves through the active application ledger and is
   delivered conversation history preceding the active follow-up.
-- Every cited evidence ID came from a successful search in the same active
-  planning session or from explicitly supplied current-slide evidence; every
-  cited slide exists in the active deck.
+- Every accepted evidence ID came from a successful search in the same active
+  planning session, explicitly supplied current-slide evidence, or an
+  application-derived summary of a verified packaged slide. Raw historical or
+  invented evidence IDs are never trusted as answer text.
 - Scope and grounding source remain separate and coherent.
 - A focus slide must be cited, valid, and supported by the plan; accepting a focus
   proposal does not change `visible_slide_id`.
@@ -73,7 +74,8 @@ plain follow-up + logical-turn ledger + active deck/session snapshot
 | Extended knowledge | Related uncovered question uses `extended_knowledge` + `model_knowledge` and no deck evidence claim | Automated |
 | Clarification | Ambiguous reference uses `needs_clarification` + `none` and exactly one concise question | Automated |
 | Out of scope | Unsupported or unsafe request uses `out_of_scope` + `none` with no focus or grounding citations | Automated |
-| Invalid citation | Unknown or ineligible turn/evidence/slide rejects terminally without an accepted plan | Automated |
+| Invalid optional citation | Invalid references are filtered and privately logged when enough valid support remains | Automated |
+| Invalid required support | Filtering that leaves no truthful grounding support rejects terminally | Automated |
 | Stale/cancelled/duplicate | Late or repeated actions return bounded rejection codes and no side effects | Automated |
 | Operator sanity case | Recorded function/result/decision chronology makes both accepted paths auditable | Human rubric |
 
@@ -87,8 +89,9 @@ plain follow-up + logical-turn ledger + active deck/session snapshot
   active follow-up cancels the planning session.
 - Cancellation: cancellation before work, after search, or after terminal state is
   idempotent and cannot create or replace an accepted plan.
-- Partial failure: invalid search filters or plan citations yield one explicit
-  code; the harness never falls through to free-form answering.
+- Partial failure: invalid optional plan citations are filtered and logged when
+  truthful support survives; filtering that leaves no support yields one
+  explicit code. The harness never falls through to free-form answering.
 - Recovery: a fresh planning session can replay the same recorded actions and
   produce byte-identical search/plan data.
 - Capability mismatch: provider tool-shape behavior remains deferred to the

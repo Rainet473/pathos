@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -35,6 +36,7 @@ from voice_presentation.domain.reasoning import (
     ReasoningModel,
     SearchMaterialInput,
     SubmitAnswerPlanInput,
+    SubmitPresentationActionInput,
 )
 from voice_presentation.transport.context_trace import (
     ApplicationDecisionTrace,
@@ -46,10 +48,11 @@ from voice_presentation.transport.context_trace import (
 )
 
 
-SILENT_PLANNER_INSTRUCTIONS = """You are the silent planning phase for an application-controlled presentation. Never answer the listener in prose. Every response must contain exactly one native function call and no more than one. Supply every tool field, using empty arrays or null where appropriate. If the listener asks what wording in a retained prior turn means, submit a grounded conversation plan immediately and cite that antecedent turn; do not search for wording already present in conversation. Use search_material only when the retained conversation does not contain enough support. Never repeat the same search. After zero to two searches, terminate with submit_answer_plan. Cite only eligible earlier logical turn IDs from the immediately preceding developer Turn reference annotations and only evidence IDs returned by search_material in the current planning turn or supplied in the current application snapshot. Never cite activeFollowUpTurnId; it is the request being planned, not supporting evidence. needs_clarification and out_of_scope use empty supportingTurnIds. Earlier tool outputs are audit history; re-run a current search before citing any evidence ID shown only in that history. Keep scope separate from grounding source. A conversation reference uses grounded plus conversation; deck material uses grounded plus presentation; mixed support uses conversation_and_presentation; related knowledge absent from the deck uses extended_knowledge plus model_knowledge; ambiguity uses needs_clarification plus none; unsupported requests use out_of_scope plus none. If focusSlideId is non-null, the identical slide ID must also appear in supportingSlideIds; use null when no visual focus is needed. The answer brief is concise factual guidance, not a scripted answer or hidden reasoning. The application alone owns navigation, continuation, speech, and state. Never include continuation permission in a plan."""
+SILENT_PLANNER_INSTRUCTIONS = """You are the silent planning phase for an application-controlled presentation. Never answer the listener in prose. Every response must contain exactly one native function call and no more than one. Supply every tool field, using empty arrays or null where appropriate. If the active listener message is a standalone request to resume, carry on, or continue the presentation or narration, immediately call submit_presentation_action with continue_presentation; do not search and do not submit an answer plan. A compound request such as explain a topic and then continue is not standalone and must use submit_answer_plan. Negated or quoted wording such as do not continue or what does continue mean is not a continuation action. If the listener asks what wording in a retained prior turn means, submit a grounded conversation plan immediately and cite that antecedent turn; do not search for wording already present in conversation. Use search_material only when the retained conversation does not contain enough support. Never repeat the same search. After zero to two searches, terminate with submit_answer_plan. Cite only eligible earlier logical turn IDs from the immediately preceding developer Turn reference annotations and only evidence IDs returned by search_material in the current planning turn or supplied in the current application snapshot. Never cite activeFollowUpTurnId; it is the request being planned, not supporting evidence. needs_clarification and out_of_scope use empty supportingTurnIds. Earlier tool outputs are audit history; re-run a current search before citing any evidence ID shown only in that history. Keep scope separate from grounding source. A conversation reference uses grounded plus conversation; deck material uses grounded plus presentation; mixed support uses conversation_and_presentation; related knowledge absent from the deck uses extended_knowledge plus model_knowledge; ambiguity uses needs_clarification plus none; unsupported requests use out_of_scope plus none. If focusSlideId is non-null, the identical slide ID must also appear in supportingSlideIds; use null when no visual focus is needed. The answer brief is concise factual guidance, not a scripted answer or hidden reasoning. The model only proposes a typed action or answer plan. The application alone validates and owns navigation, continuation, speech, and state. Never include continuation permission in an answer plan."""
 
 MAX_PROVIDER_REQUESTS = 3
 DEFAULT_MAX_COMPLETION_TOKENS = 512
+logger = logging.getLogger(__name__)
 
 
 class PlannerFailureCode(StrEnum):
@@ -91,9 +94,17 @@ class SilentPlanningRun(ReasoningModel):
     failure_detail: str | None = None
     requests: tuple[PlannerRequestEvidence, ...] = ()
     trace: tuple[PlanningTraceEntry, ...] = ()
-    schema_names: tuple[Literal["search_material", "submit_answer_plan"], ...] = (
+    schema_names: tuple[
+        Literal[
+            "search_material",
+            "submit_answer_plan",
+            "submit_presentation_action",
+        ],
+        ...,
+    ] = (
         "search_material",
         "submit_answer_plan",
+        "submit_presentation_action",
     )
     speech_requested: Literal[False] = False
 
@@ -106,13 +117,23 @@ class SilentPlanningRun(ReasoningModel):
 
     def sanitized_summary(self) -> dict[str, object]:
         plan = self.snapshot.accepted_plan
+        action = self.snapshot.accepted_action
         return {
             "case": self.case_name,
             "status": self.snapshot.status.value,
             "failureCode": self.failure_code.value if self.failure_code else None,
             "planId": plan.plan_id if plan is not None else None,
+            "actionId": action.action_id if action is not None else None,
+            "presentationAction": action.action.value if action is not None else None,
             "supportingTurnIds": list(plan.supporting_turn_ids) if plan else [],
             "evidenceIds": list(plan.evidence_ids) if plan else [],
+            "citationFilter": (
+                self.snapshot.citation_filter.model_dump(
+                    mode="json", by_alias=True
+                )
+                if self.snapshot.citation_filter is not None
+                else None
+            ),
             "terminologyHints": [
                 hint.model_dump(mode="json", by_alias=True)
                 for hint in self.snapshot.terminology_hints
@@ -178,12 +199,20 @@ class _CollectedProviderResponse(ReasoningModel):
     received_at: float
 
 
-def build_planning_tools() -> tuple[llm.RawFunctionTool, llm.RawFunctionTool]:
+def build_planning_tools() -> tuple[
+    llm.RawFunctionTool,
+    llm.RawFunctionTool,
+    llm.RawFunctionTool,
+]:
     async def search_material(raw_arguments: dict[str, object]) -> None:
         del raw_arguments
         raise RuntimeError("planning tools are executed by application code")
 
     async def submit_answer_plan(raw_arguments: dict[str, object]) -> None:
+        del raw_arguments
+        raise RuntimeError("planning tools are executed by application code")
+
+    async def submit_presentation_action(raw_arguments: dict[str, object]) -> None:
         del raw_arguments
         raise RuntimeError("planning tools are executed by application code")
 
@@ -209,9 +238,23 @@ def build_planning_tools() -> tuple[llm.RawFunctionTool, llm.RawFunctionTool]:
             "parameters": _provider_tool_parameters(SubmitAnswerPlanInput),
         },
     )
+    action_tool = llm.function_tool(
+        submit_presentation_action,
+        raw_schema={
+            "name": "submit_presentation_action",
+            "description": (
+                "Propose one terminal presentation action for a standalone user "
+                "command. The application validates and executes it."
+            ),
+            "parameters": _provider_tool_parameters(
+                SubmitPresentationActionInput
+            ),
+        },
+    )
     assert isinstance(search_tool, llm.RawFunctionTool)
     assert isinstance(submit_tool, llm.RawFunctionTool)
-    return search_tool, submit_tool
+    assert isinstance(action_tool, llm.RawFunctionTool)
+    return search_tool, submit_tool, action_tool
 
 
 class LiveKitSilentPlanner:
@@ -326,9 +369,12 @@ class LiveKitSilentPlanner:
                     }
                     forced_tool_name = None
                 else:
-                    request_tools = (
-                        self._tools if search_available else (self._tools[1],)
-                    )
+                    if not search_available:
+                        request_tools = (self._tools[1],)
+                    elif session.snapshot.search_calls:
+                        request_tools = self._tools[:2]
+                    else:
+                        request_tools = self._tools
                     tool_choice = (
                         "required"
                         if search_available
@@ -369,6 +415,7 @@ class LiveKitSilentPlanner:
                 if tool_call.name not in {
                     "search_material",
                     "submit_answer_plan",
+                    "submit_presentation_action",
                 }:
                     session.cancel(PlanningRejectionCode.CANCELLED)
                     return self._finish(
@@ -386,6 +433,10 @@ class LiveKitSilentPlanner:
                         raise ValueError
                     if tool_call.name == "search_material":
                         parsed = SearchMaterialInput.model_validate(raw_arguments)
+                    elif tool_call.name == "submit_presentation_action":
+                        parsed = SubmitPresentationActionInput.model_validate(
+                            raw_arguments
+                        )
                     else:
                         parsed = SubmitAnswerPlanInput.model_validate(raw_arguments)
                 except json.JSONDecodeError:
@@ -567,21 +618,71 @@ class LiveKitSilentPlanner:
 
                     if on_stage is not None:
                         await on_stage(PlanningStage.PREPARING)
+                    if isinstance(parsed, SubmitPresentationActionInput):
+                        action = session.submit_action(
+                            parsed,
+                            session_version=context.session_version,
+                            follow_up_turn_id=context.follow_up_turn_id,
+                            received_at=response.received_at,
+                        )
+                        trace.extend(
+                            (
+                                FunctionResultTrace(
+                                    call_id=tool_call.call_id,
+                                    name=tool_call.name,
+                                    output={
+                                        "accepted": True,
+                                        "actionId": action.action_id,
+                                        "action": action.action.value,
+                                    },
+                                    is_error=False,
+                                ),
+                                ApplicationDecisionTrace(
+                                    decision_id=f"decision-{case_name}",
+                                    source_call_id=tool_call.call_id,
+                                    plan_id=action.action_id,
+                                    accepted=True,
+                                    reason_code="accepted",
+                                ),
+                            )
+                        )
+                        return self._finish(
+                            case_name=case_name,
+                            session=session,
+                            requests=requests,
+                            trace=trace,
+                        )
                     plan = session.submit(
                         parsed,
                         session_version=context.session_version,
                         follow_up_turn_id=context.follow_up_turn_id,
                         received_at=response.received_at,
                     )
+                    citation_filter = session.snapshot.citation_filter
+                    result_output: dict[str, object] = {
+                        "accepted": True,
+                        "planId": plan.plan_id,
+                    }
+                    if citation_filter is not None:
+                        citation_filter_output = citation_filter.model_dump(
+                            mode="json", by_alias=True
+                        )
+                        result_output["citationFilter"] = citation_filter_output
+                        logger.warning(
+                            "filtered answer-plan citations case=%s report=%s",
+                            case_name,
+                            json.dumps(
+                                citation_filter_output,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ),
+                        )
                     trace.extend(
                         (
                             FunctionResultTrace(
                                 call_id=tool_call.call_id,
                                 name=tool_call.name,
-                                output={
-                                    "accepted": True,
-                                    "planId": plan.plan_id,
-                                },
+                                output=result_output,
                                 is_error=False,
                             ),
                             ApplicationDecisionTrace(
@@ -589,7 +690,11 @@ class LiveKitSilentPlanner:
                                 source_call_id=tool_call.call_id,
                                 plan_id=plan.plan_id,
                                 accepted=True,
-                                reason_code="accepted",
+                                reason_code=(
+                                    "accepted_with_filtered_citations"
+                                    if citation_filter is not None
+                                    else "accepted"
+                                ),
                                 supporting_turn_ids=plan.supporting_turn_ids,
                             ),
                         )
@@ -605,6 +710,23 @@ class LiveKitSilentPlanner:
                         "accepted": False,
                         "reasonCode": error.code.value,
                     }
+                    citation_filter = session.snapshot.citation_filter
+                    if citation_filter is not None:
+                        citation_filter_output = citation_filter.model_dump(
+                            mode="json", by_alias=True
+                        )
+                        rejection_output["citationFilter"] = citation_filter_output
+                        logger.warning(
+                            "rejected answer-plan after citation filtering "
+                            "case=%s reason=%s report=%s",
+                            case_name,
+                            error.code.value,
+                            json.dumps(
+                                citation_filter_output,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ),
+                        )
                     trace.extend(
                         (
                             FunctionResultTrace(
@@ -619,11 +741,7 @@ class LiveKitSilentPlanner:
                                 plan_id=f"rejected-plan-{case_name}",
                                 accepted=False,
                                 reason_code=error.code.value,
-                                supporting_turn_ids=(
-                                    parsed.supporting_turn_ids
-                                    if isinstance(parsed, SubmitAnswerPlanInput)
-                                    else ()
-                                ),
+                                supporting_turn_ids=(),
                             ),
                         )
                     )
