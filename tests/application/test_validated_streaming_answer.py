@@ -7,6 +7,9 @@ import pytest
 from voice_presentation.application.live_presentation import (
     ApplicationPresentationSession,
 )
+from voice_presentation.application.follow_up_planning import (
+    FollowUpPlanningSession,
+)
 from voice_presentation.content.repository import JsonMaterialRepository
 from voice_presentation.content.search import MaterialSearch
 from voice_presentation.domain.contracts import (
@@ -24,8 +27,11 @@ from voice_presentation.domain.provenance import (
     TurnRole,
 )
 from voice_presentation.domain.reasoning import (
+    PresentationActionKind,
     PlanningStage,
     SearchMaterialInput,
+    SubmitAnswerPlanInput,
+    ValidatedPresentationAction,
     ValidatedAnswerPlan,
 )
 
@@ -87,6 +93,60 @@ def _conversation_plan(*, request, narration_turn_id: str) -> ValidatedAnswerPla
         ),
         supporting_turn_ids=(narration_turn_id,),
         supporting_slide_ids=("control-loop",),
+    )
+
+
+def test_validated_model_continue_action_resumes_without_creating_an_answer():
+    session, _ = _interrupted_session()
+    request = session.begin_follow_up(
+        "Would you carry on with the presentation from there?",
+        provider_item_id="provider-user-continue",
+    )
+
+    resumed = session.accept_presentation_action(
+        ValidatedPresentationAction(
+            action_id="presentation-action-1",
+            follow_up_turn_id=request.context.follow_up_turn_id,
+            session_version=request.context.session_version,
+            action=PresentationActionKind.CONTINUE_PRESENTATION,
+        )
+    )
+
+    assert resumed.view.state.phase is PresentationPhase.PRESENTING
+    assert resumed.generation is not None
+    assert resumed.generation.purpose.value == "narration"
+    assert resumed.view.planning_stage is None
+    assert session.active_planning_identity() == (
+        resumed.view.state.session_version,
+        "",
+    )
+    assert [event.type for event in resumed.view.events] == [
+        DomainEventType.PRESENTATION_RESUMED,
+        DomainEventType.BEAT_SELECTED,
+    ]
+
+
+def test_stale_model_continue_action_is_rejected_without_state_change():
+    session, _ = _interrupted_session()
+    request = session.begin_follow_up("Would you continue from there?")
+    before = session.view()
+
+    with pytest.raises(ValueError, match="stale presentation action"):
+        session.accept_presentation_action(
+            ValidatedPresentationAction(
+                action_id="presentation-action-stale",
+                follow_up_turn_id=request.context.follow_up_turn_id,
+                session_version=request.context.session_version + 1,
+                action=PresentationActionKind.CONTINUE_PRESENTATION,
+            )
+        )
+
+    after = session.view()
+    assert after.state == before.state
+    assert after.planning_stage == before.planning_stage
+    assert session.active_planning_identity() == (
+        request.context.session_version,
+        request.context.follow_up_turn_id,
     )
 
 
@@ -241,6 +301,47 @@ def test_presentation_plan_resolves_only_accepted_search_evidence_and_waits():
         DomainEventType.BEAT_SELECTED,
     ]
     assert resumed.view.events[0].slide_change_reason is SlideChangeReason.RESTORE
+
+
+def test_verified_slide_fallback_reaches_answer_as_packaged_summary_evidence():
+    session, narration_turn_id = _interrupted_session()
+    request = session.begin_follow_up(
+        "Explain ABS, then continue your presentation.",
+        provider_item_id="provider-user-follow-up",
+    )
+    ledger = _provenance(request=request, narration_turn_id=narration_turn_id)
+    planning = FollowUpPlanningSession(
+        deck=session.deck,
+        provenance=ledger,
+        context=request.context,
+    )
+    plan = planning.submit(
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief="Explain how ABS manages pressure near wheel lock.",
+            supporting_slide_ids=("braking-abs",),
+            focus_slide_id="braking-abs",
+        ),
+        session_version=request.context.session_version,
+        follow_up_turn_id=request.context.follow_up_turn_id,
+    )
+
+    accepted = session.accept_answer_plan(
+        plan,
+        provenance=ledger,
+        search_results=planning.snapshot.search_results,
+    )
+
+    directive = accepted.generation
+    assert directive is not None
+    assert directive.scope_mode is ScopeMode.GROUNDED
+    assert directive.grounding_source is GroundingSource.PRESENTATION
+    assert directive.evidence_ids == (
+        "motorcycle-controls.braking-abs.summary.0",
+    )
+    assert "ABS manages pressure near lock" in directive.instructions
+    assert accepted.view.state.visible_slide_id == "braking-abs"
 
 
 def test_focused_answer_and_continue_restores_before_resuming_once():

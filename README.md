@@ -82,9 +82,11 @@ See the concise [advantages](docs/advantages.md) and honest
 
 ## Demo
 
-<!-- DEMO_VIDEO_PLACEHOLDER -->
+https://github.com/user-attachments/assets/b0875b1a-2ebb-4bfe-86f8-0afd839ceccf
 
-> Demo video coming soon. Replace this block with the reviewed public recording.
+> **Watch the 24-second demo:** Pathos answers an interruption, exposes the
+> active reasoning path, restores the semantic presentation cursor after a
+> spoken Continue command, and commits the resumed narration beat.
 
 For a repeatable five-minute walkthrough now, use the
 [public demo script](docs/demo-script.md). It covers interruption, spoken

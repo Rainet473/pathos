@@ -21,6 +21,10 @@ pytestmark = pytest.mark.offline
         "Please resume the presentation now.",
         "Go on.",
         "Alright, carry on.",
+        "Okay. Carry on with the presentation then.",
+        "Okay. Sounds good. Yeah. Carry on with the presentation.",
+        "Okay. Continue on with the presentation.",
+        "Yeah, continue on with your narration please.",
     ),
 )
 def test_bounded_spoken_continue_variants_match(transcript: str):
@@ -38,8 +42,10 @@ def test_bounded_spoken_continue_variants_match(transcript: str):
         "When should I continue braking?",
         "What does resume mean?",
         "Continue searching the deck.",
+        "Continue searching through the presentation.",
+        "Continue only after I ask another question.",
+        "What does continue with the presentation mean?",
     ),
 )
 def test_negative_compound_and_unrelated_phrases_do_not_match(transcript: str):
     assert is_spoken_continue_command(transcript) is False
-

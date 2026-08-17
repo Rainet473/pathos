@@ -172,6 +172,23 @@ class MaterialSearch:
             truncated=truncated,
         )
 
+    def slide_summary_hit(self, slide_id: str) -> MaterialHit:
+        """Return bounded trusted support for one verified packaged slide."""
+
+        self._deck.slide(slide_id)
+        segment = self._segment_lookup[
+            (slide_id, MaterialSection.SUMMARY, 0)
+        ]
+        return MaterialHit(
+            evidence_id=segment.evidence_id,
+            slide_id=segment.slide_id,
+            slide_number=segment.slide_number,
+            section=segment.section,
+            segment_index=segment.segment_index,
+            text=segment.text,
+            matched_on=("verified_slide_reference",),
+        )
+
     def _hit(
         self,
         candidate: _ScoredSegment,

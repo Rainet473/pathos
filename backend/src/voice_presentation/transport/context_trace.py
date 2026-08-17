@@ -198,6 +198,12 @@ class ReasoningContextSnapshot(BaseModel):
                         f"application decision {entry.decision_id} appears before its function result"
                     )
                 ledger.require_turn_ids(entry.supporting_turn_ids)
+                if not entry.accepted:
+                    if entry.supporting_turn_ids:
+                        raise ValueError(
+                            f"rejected application decision {entry.decision_id} cannot endorse turn citations"
+                        )
+                    continue
                 source_call = next(
                     call
                     for call in self.trace
@@ -214,10 +220,48 @@ class ReasoningContextSnapshot(BaseModel):
                         raise ValueError(
                             f"function call {entry.source_call_id} has invalid turn citations"
                         )
-                    if tuple(cited_turn_ids) != entry.supporting_turn_ids:
-                        raise ValueError(
-                            f"application decision {entry.decision_id} does not match source citations"
+                    expected_turn_ids = tuple(cited_turn_ids)
+                    if expected_turn_ids != entry.supporting_turn_ids:
+                        source_result = next(
+                            result
+                            for result in self.trace
+                            if isinstance(result, FunctionResultTrace)
+                            and result.call_id == entry.source_call_id
                         )
+                        output = source_result.output
+                        citation_filter = (
+                            output.get("citationFilter")
+                            if isinstance(output, dict)
+                            else None
+                        )
+                        if not isinstance(citation_filter, dict):
+                            raise ValueError(
+                                f"application decision {entry.decision_id} does not match source citations"
+                            )
+                        removed_turn_ids: list[str] = []
+                        for key in (
+                            "removedUnknownTurnIds",
+                            "removedIneligibleTurnIds",
+                            "removedUnneededTurnIds",
+                        ):
+                            removed = citation_filter.get(key, [])
+                            if not isinstance(removed, list) or not all(
+                                isinstance(turn_id, str) for turn_id in removed
+                            ):
+                                raise ValueError(
+                                    f"application decision {entry.decision_id} has invalid citation filtering"
+                                )
+                            removed_turn_ids.extend(removed)
+                        removed_set = set(removed_turn_ids)
+                        expected_turn_ids = tuple(
+                            turn_id
+                            for turn_id in cited_turn_ids
+                            if turn_id not in removed_set
+                        )
+                        if expected_turn_ids != entry.supporting_turn_ids:
+                            raise ValueError(
+                                f"application decision {entry.decision_id} does not match filtered source citations"
+                            )
 
         registered_turns = {turn.turn_id for turn in self.turns}
         missing_turns = registered_turns - seen_turns

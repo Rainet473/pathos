@@ -68,3 +68,21 @@ def test_inspector_renders_a_connected_observable_answer_pathway():
     assert ".pathway-step::after" in styles
     assert ".pathway-step.is-active" in styles
     assert "box-shadow" in styles
+
+
+def test_desktop_transcript_uses_the_full_remaining_dock_height():
+    styles = STYLES.read_text(encoding="utf-8")
+
+    card_rule = styles.split(".workspace-transcript {", maxsplit=1)[1].split(
+        "}", maxsplit=1
+    )[0]
+    assert "display: flex" in card_rule
+    assert "flex-direction: column" in card_rule
+    assert ".workspace-transcript .live-transcript" in styles
+    transcript_rule = styles.split(
+        ".workspace-transcript .live-transcript", maxsplit=1
+    )[1].split("}", maxsplit=1)[0]
+    assert "flex: 1" in transcript_rule
+    assert "min-height: 0" in transcript_rule
+    assert "max-height: none" in transcript_rule
+    assert "overflow-y: auto" in transcript_rule

@@ -3,20 +3,25 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Annotated, Literal, Protocol
 
 from pydantic import Field
 
 from voice_presentation.content.search import MaterialSearch
 from voice_presentation.domain.content import PresentationDeck
+from voice_presentation.domain.contracts import ScopeMode
 from voice_presentation.domain.provenance import (
+    GroundingSource,
     LogicalTurnLedger,
     TurnDeliveryStatus,
     TurnPurpose,
     TurnRole,
 )
 from voice_presentation.domain.reasoning import (
+    CitationFilterReport,
+    MaterialSection,
+    PresentationActionKind,
     PlanningContext,
     PlanningRejectionCode,
     PlanningSnapshot,
@@ -25,7 +30,9 @@ from voice_presentation.domain.reasoning import (
     SearchMaterialInput,
     SearchMaterialResult,
     SubmitAnswerPlanInput,
+    SubmitPresentationActionInput,
     ValidatedAnswerPlan,
+    ValidatedPresentationAction,
 )
 from voice_presentation.transport.context_trace import (
     ApplicationDecisionTrace,
@@ -84,6 +91,7 @@ class FollowUpPlanningSession:
         self._provenance = provenance
         self._context = context
         self._search = search or MaterialSearch(deck)
+        self._support_search = MaterialSearch(deck)
         self._clock = clock
         self._active_identity = active_identity or (
             lambda: (context.session_version, context.follow_up_turn_id)
@@ -106,7 +114,13 @@ class FollowUpPlanningSession:
             for turn in provenance.turns[:follow_up_index]
             if turn.delivery_status is not TurnDeliveryStatus.PENDING
         )
+        self._known_turn_ids = frozenset(
+            turn.turn_id for turn in provenance.turns
+        )
+        self._known_slide_ids = frozenset(slide.id for slide in deck.slides)
         self._accepted_plan: ValidatedAnswerPlan | None = None
+        self._accepted_action: ValidatedPresentationAction | None = None
+        self._citation_filter: CitationFilterReport | None = None
         self._rejection_code: PlanningRejectionCode | None = None
         self._terminal_attempted = False
 
@@ -119,6 +133,8 @@ class FollowUpPlanningSession:
             search_results=tuple(self._search_results),
             terminology_hints=self._context.terminology_hints,
             accepted_plan=self._accepted_plan,
+            accepted_action=self._accepted_action,
+            citation_filter=self._citation_filter,
             rejection_code=self._rejection_code,
         )
 
@@ -165,10 +181,11 @@ class FollowUpPlanningSession:
         )
         self._begin_step(search=False)
         self._terminal_attempted = True
-        self._validate_proposal(proposal)
+        normalized = self._normalize_proposal(proposal)
+        self._validate_proposal(normalized)
         accepted = ValidatedAnswerPlan.model_validate(
             {
-                **proposal.model_dump(),
+                **normalized.model_dump(),
                 "plan_id": self._plan_id(),
                 "follow_up_turn_id": self._context.follow_up_turn_id,
                 "session_version": self._context.session_version,
@@ -176,6 +193,32 @@ class FollowUpPlanningSession:
             }
         )
         self._accepted_plan = accepted
+        self._status = PlanningStatus.ACCEPTED
+        return accepted
+
+    def submit_action(
+        self,
+        proposal: SubmitPresentationActionInput,
+        *,
+        session_version: int,
+        follow_up_turn_id: str,
+        received_at: float | None = None,
+    ) -> ValidatedPresentationAction:
+        self._assert_action_identity(
+            session_version=session_version,
+            follow_up_turn_id=follow_up_turn_id,
+            terminal=True,
+            observed_at=received_at,
+        )
+        self._begin_step(search=False)
+        self._terminal_attempted = True
+        accepted = ValidatedPresentationAction(
+            action_id=self._action_id(),
+            follow_up_turn_id=self._context.follow_up_turn_id,
+            session_version=self._context.session_version,
+            action=PresentationActionKind(proposal.action),
+        )
+        self._accepted_action = accepted
         self._status = PlanningStatus.ACCEPTED
         return accepted
 
@@ -222,7 +265,7 @@ class FollowUpPlanningSession:
         if self._status is PlanningStatus.ACTIVE and not self._terminal_attempted:
             self._reject(
                 PlanningRejectionCode.MISSING_TERMINAL,
-                "planning ended without submit_answer_plan",
+                "planning ended without a terminal submission",
             )
         return self.snapshot
 
@@ -238,7 +281,7 @@ class FollowUpPlanningSession:
             if self._status is PlanningStatus.ACCEPTED and terminal:
                 raise PlanningProtocolError(
                     PlanningRejectionCode.DUPLICATE_TERMINAL,
-                    "submit_answer_plan was already accepted",
+                    "a terminal planning result was already accepted",
                 )
             raise PlanningProtocolError(
                 self._rejection_code or PlanningRejectionCode.CANCELLED,
@@ -305,6 +348,287 @@ class FollowUpPlanningSession:
                 PlanningRejectionCode.STALE_FOLLOW_UP,
                 "active follow-up turn changed during planning",
             )
+
+    def _normalize_proposal(
+        self,
+        proposal: SubmitAnswerPlanInput,
+    ) -> SubmitAnswerPlanInput:
+        unknown_turn_ids = tuple(
+            turn_id
+            for turn_id in proposal.supporting_turn_ids
+            if turn_id not in self._known_turn_ids
+        )
+        ineligible_turn_ids = tuple(
+            turn_id
+            for turn_id in proposal.supporting_turn_ids
+            if turn_id in self._known_turn_ids
+            and turn_id not in self._eligible_turn_ids
+        )
+        eligible_turn_ids = tuple(
+            turn_id
+            for turn_id in proposal.supporting_turn_ids
+            if turn_id in self._eligible_turn_ids
+        )
+        retained_evidence_ids = tuple(
+            evidence_id
+            for evidence_id in proposal.evidence_ids
+            if evidence_id in self._evidence
+        )
+        untrusted_evidence_ids = tuple(
+            evidence_id
+            for evidence_id in proposal.evidence_ids
+            if evidence_id not in self._evidence
+        )
+        valid_slide_ids = tuple(
+            slide_id
+            for slide_id in proposal.supporting_slide_ids
+            if slide_id in self._known_slide_ids
+        )
+        removed_slide_ids = tuple(
+            slide_id
+            for slide_id in proposal.supporting_slide_ids
+            if slide_id not in self._known_slide_ids
+        )
+        derived_slide_ids = self._unique(
+            slide_id
+            for evidence_id in proposal.evidence_ids
+            if (slide_id := self._slide_id_from_evidence_id(evidence_id))
+            is not None
+        )
+        recovered_slide_ids = tuple(
+            slide_id
+            for slide_id in derived_slide_ids
+            if slide_id not in valid_slide_ids
+        )
+        retained_evidence_slides = self._unique(
+            self._evidence[evidence_id].slide_id
+            for evidence_id in retained_evidence_ids
+        )
+        candidate_slide_ids = self._unique(
+            (*retained_evidence_slides, *valid_slide_ids, *derived_slide_ids)
+        )[:6]
+        has_turn_support = bool(eligible_turn_ids)
+        has_presentation_support = bool(
+            retained_evidence_ids or candidate_slide_ids
+        )
+
+        original_source = proposal.grounding_source
+        normalized_source = original_source
+        use_turn_support = False
+        use_presentation_support = False
+        if proposal.scope is ScopeMode.GROUNDED:
+            if original_source is GroundingSource.PRESENTATION:
+                if has_presentation_support:
+                    use_presentation_support = True
+                elif has_turn_support:
+                    use_turn_support = True
+                    normalized_source = GroundingSource.CONVERSATION
+            elif original_source is GroundingSource.CONVERSATION:
+                if has_turn_support:
+                    use_turn_support = True
+                elif has_presentation_support:
+                    use_presentation_support = True
+                    normalized_source = GroundingSource.PRESENTATION
+            else:
+                use_turn_support = has_turn_support
+                use_presentation_support = has_presentation_support
+                if use_turn_support and use_presentation_support:
+                    normalized_source = (
+                        GroundingSource.CONVERSATION_AND_PRESENTATION
+                    )
+                elif use_presentation_support:
+                    normalized_source = GroundingSource.PRESENTATION
+                elif use_turn_support:
+                    normalized_source = GroundingSource.CONVERSATION
+        elif proposal.scope is ScopeMode.EXTENDED_KNOWLEDGE:
+            # Model knowledge does not need conversation citations. Filtering them
+            # preserves the model's answer decision without treating the request as
+            # evidence for itself.
+            normalized_source = GroundingSource.MODEL_KNOWLEDGE
+        elif proposal.scope is ScopeMode.NEEDS_CLARIFICATION:
+            use_turn_support = has_turn_support
+            normalized_source = GroundingSource.NONE
+        else:
+            normalized_source = GroundingSource.NONE
+
+        derived_hits = ()
+        normalized_evidence_ids: tuple[str, ...] = ()
+        if proposal.scope in {
+            ScopeMode.EXTENDED_KNOWLEDGE,
+            ScopeMode.NEEDS_CLARIFICATION,
+        }:
+            normalized_slide_ids = candidate_slide_ids
+        elif proposal.scope is ScopeMode.OUT_OF_SCOPE:
+            normalized_slide_ids = ()
+        else:
+            normalized_slide_ids = valid_slide_ids
+        if use_presentation_support:
+            represented_slides = set(retained_evidence_slides)
+            hits = []
+            for slide_id in candidate_slide_ids:
+                if slide_id in represented_slides:
+                    continue
+                if len(retained_evidence_ids) + len(hits) >= 10:
+                    break
+                hits.append(self._support_search.slide_summary_hit(slide_id))
+                represented_slides.add(slide_id)
+            derived_hits = tuple(hits)
+            if derived_hits:
+                result = SearchMaterialResult(
+                    query_id=(
+                        "citation-derived-slide-support-"
+                        f"{self._context.follow_up_turn_id}"
+                    ),
+                    hits=derived_hits,
+                )
+                self._search_results.append(result)
+                for hit in derived_hits:
+                    self._evidence[hit.evidence_id] = hit
+            all_evidence_ids = self._unique(
+                (*retained_evidence_ids, *(hit.evidence_id for hit in derived_hits))
+            )[:10]
+            evidence_slide_ids = self._unique(
+                self._evidence[evidence_id].slide_id
+                for evidence_id in all_evidence_ids
+            )[:6]
+            normalized_slide_ids = evidence_slide_ids
+            normalized_evidence_ids = tuple(
+                evidence_id
+                for evidence_id in all_evidence_ids
+                if self._evidence[evidence_id].slide_id in normalized_slide_ids
+            )
+
+        normalized_turn_ids = eligible_turn_ids if use_turn_support else ()
+        removed_evidence_ids = tuple(
+            evidence_id
+            for evidence_id in proposal.evidence_ids
+            if evidence_id not in normalized_evidence_ids
+        )
+        unneeded_turn_ids = tuple(
+            turn_id
+            for turn_id in eligible_turn_ids
+            if turn_id not in normalized_turn_ids
+        )
+
+        original_focus = proposal.focus_slide_id
+        normalized_focus = original_focus
+        if proposal.scope in {
+            ScopeMode.NEEDS_CLARIFICATION,
+            ScopeMode.OUT_OF_SCOPE,
+        }:
+            normalized_focus = None
+        elif original_focus is not None and original_focus not in self._known_slide_ids:
+            normalized_focus = next(
+                (
+                    slide_id
+                    for slide_id in derived_slide_ids
+                    if slide_id in normalized_slide_ids
+                ),
+                normalized_slide_ids[0] if normalized_slide_ids else None,
+            )
+        if normalized_focus is not None:
+            cited_turn_slides = {
+                slide_id
+                for turn_id in normalized_turn_ids
+                for turn in (self._provenance.resolve(turn_id),)
+                for slide_id in (turn.slide_id, turn.visible_slide_id)
+                if slide_id is not None
+            }
+            if normalized_focus not in (
+                set(normalized_slide_ids) | cited_turn_slides
+            ):
+                normalized_focus = None
+
+        source_changed = normalized_source is not original_source
+        focus_changed = normalized_focus != original_focus
+        report = CitationFilterReport(
+            removed_unknown_turn_ids=unknown_turn_ids,
+            removed_ineligible_turn_ids=ineligible_turn_ids,
+            removed_unneeded_turn_ids=unneeded_turn_ids,
+            removed_evidence_ids=removed_evidence_ids,
+            removed_unknown_slide_ids=removed_slide_ids,
+            derived_slide_ids_from_evidence=recovered_slide_ids,
+            derived_evidence_ids_from_slides=tuple(
+                hit.evidence_id for hit in derived_hits
+            ),
+            removed_focus_slide_id=original_focus if focus_changed else None,
+            normalized_focus_slide_id=normalized_focus if focus_changed else None,
+            original_grounding_source=original_source if source_changed else None,
+            normalized_grounding_source=normalized_source if source_changed else None,
+        )
+        if any(
+            (
+                unknown_turn_ids,
+                ineligible_turn_ids,
+                unneeded_turn_ids,
+                removed_evidence_ids,
+                removed_slide_ids,
+                recovered_slide_ids,
+                derived_hits,
+                focus_changed,
+                source_changed,
+            )
+        ):
+            self._citation_filter = report
+
+        if proposal.scope is ScopeMode.GROUNDED and not (
+            normalized_turn_ids or normalized_evidence_ids
+        ):
+            if ineligible_turn_ids:
+                self._reject(
+                    PlanningRejectionCode.INELIGIBLE_TURN,
+                    "no usable support remained after filtering ineligible turns",
+                )
+            if unknown_turn_ids:
+                self._reject(
+                    PlanningRejectionCode.UNKNOWN_TURN,
+                    "no usable support remained after filtering unknown turns",
+                )
+            if untrusted_evidence_ids:
+                self._reject(
+                    PlanningRejectionCode.UNKNOWN_EVIDENCE,
+                    "no usable support remained after filtering evidence",
+                )
+            if removed_slide_ids:
+                self._reject(
+                    PlanningRejectionCode.UNKNOWN_SLIDE,
+                    "no usable support remained after filtering slides",
+                )
+            self._reject(
+                PlanningRejectionCode.INCOHERENT_PLAN,
+                "grounded plan has no usable support after citation filtering",
+            )
+
+        return SubmitAnswerPlanInput.model_validate(
+            {
+                **proposal.model_dump(),
+                "grounding_source": normalized_source,
+                "supporting_turn_ids": normalized_turn_ids,
+                "evidence_ids": normalized_evidence_ids,
+                "supporting_slide_ids": normalized_slide_ids,
+                "focus_slide_id": normalized_focus,
+            }
+        )
+
+    def _slide_id_from_evidence_id(self, evidence_id: str) -> str | None:
+        prefix = f"{self._deck.id}."
+        if not evidence_id.startswith(prefix):
+            return None
+        parts = evidence_id[len(prefix) :].rsplit(".", 2)
+        if len(parts) != 3:
+            return None
+        slide_id, section, segment_index = parts
+        if (
+            slide_id not in self._known_slide_ids
+            or section not in {value.value for value in MaterialSection}
+            or not segment_index.isdigit()
+        ):
+            return None
+        return slide_id
+
+    @staticmethod
+    def _unique(values: Iterable[str]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(values))
 
     def _validate_proposal(self, proposal: SubmitAnswerPlanInput) -> None:
         try:
@@ -377,6 +701,12 @@ class FollowUpPlanningSession:
             return f"answer-plan-{self._context.follow_up_turn_id}"
         return f"answer-plan-{suffix.group(1)}"
 
+    def _action_id(self) -> str:
+        suffix = _PLAN_SUFFIX.search(self._context.follow_up_turn_id)
+        if suffix is None:
+            return f"presentation-action-{self._context.follow_up_turn_id}"
+        return f"presentation-action-{suffix.group(1)}"
+
     def _reject(self, code: PlanningRejectionCode, message: str) -> None:
         self._status = PlanningStatus.REJECTED
         self._rejection_code = code
@@ -418,6 +748,7 @@ class RecordedPlanningRun(ReasoningModel):
     status: PlanningStatus
     accepted_plan: ValidatedAnswerPlan | None = None
     search_results: tuple[SearchMaterialResult, ...] = ()
+    citation_filter: CitationFilterReport | None = None
     rejection_code: PlanningRejectionCode | None = None
     trace: tuple[PlanningTraceEntry, ...]
 
@@ -480,12 +811,21 @@ class DeterministicPlannerHarness:
                         session_version=case.context.session_version,
                         follow_up_turn_id=case.context.follow_up_turn_id,
                     )
+                    citation_filter = session.snapshot.citation_filter
+                    result_output: dict[str, object] = {
+                        "accepted": True,
+                        "planId": plan.plan_id,
+                    }
+                    if citation_filter is not None:
+                        result_output["citationFilter"] = (
+                            citation_filter.model_dump(mode="json", by_alias=True)
+                        )
                     trace.extend(
                         (
                             FunctionResultTrace(
                                 call_id=call_id,
                                 name=action.type,
-                                output={"accepted": True, "planId": plan.plan_id},
+                                output=result_output,
                                 is_error=False,
                             ),
                             ApplicationDecisionTrace(
@@ -493,7 +833,11 @@ class DeterministicPlannerHarness:
                                 source_call_id=call_id,
                                 plan_id=plan.plan_id,
                                 accepted=True,
-                                reason_code="accepted",
+                                reason_code=(
+                                    "accepted_with_filtered_citations"
+                                    if citation_filter is not None
+                                    else "accepted"
+                                ),
                                 supporting_turn_ids=plan.supporting_turn_ids,
                             ),
                         )
@@ -518,7 +862,7 @@ class DeterministicPlannerHarness:
                             plan_id=f"rejected-plan-{case.name}",
                             accepted=False,
                             reason_code=error.code.value,
-                            supporting_turn_ids=action.input.supporting_turn_ids,
+                            supporting_turn_ids=(),
                         )
                     )
                 break
@@ -553,6 +897,7 @@ class DeterministicPlannerHarness:
             status=snapshot.status,
             accepted_plan=snapshot.accepted_plan,
             search_results=snapshot.search_results,
+            citation_filter=snapshot.citation_filter,
             rejection_code=snapshot.rejection_code,
             trace=tuple(trace),
         )

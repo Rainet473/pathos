@@ -114,23 +114,19 @@ class SubmitAnswerPlanInput(ReasoningModel):
             if len(set(values)) != len(values):
                 raise ValueError(f"{field_name} must contain unique values")
 
-        if self.focus_slide_id is not None and (
-            self.focus_slide_id not in self.supporting_slide_ids
-        ):
-            raise ValueError("focus_slide_id must be a supporting slide")
-
         if self.scope is ScopeMode.GROUNDED:
-            self._validate_grounded_source()
+            if self.grounding_source not in {
+                GroundingSource.CONVERSATION,
+                GroundingSource.PRESENTATION,
+                GroundingSource.CONVERSATION_AND_PRESENTATION,
+            }:
+                raise ValueError("grounded scope requires a grounded source")
             if self.clarification_prompt is not None:
                 raise ValueError("grounded plans cannot include clarification_prompt")
         elif self.scope is ScopeMode.EXTENDED_KNOWLEDGE:
             if self.grounding_source is not GroundingSource.MODEL_KNOWLEDGE:
                 raise ValueError(
                     "extended_knowledge requires model_knowledge grounding source"
-                )
-            if self.evidence_ids:
-                raise ValueError(
-                    "extended_knowledge cannot claim deck evidence as answer grounding"
                 )
             if self.clarification_prompt is not None:
                 raise ValueError(
@@ -146,45 +142,14 @@ class SubmitAnswerPlanInput(ReasoningModel):
                 or self.clarification_prompt.count("?") != 1
             ):
                 raise ValueError("clarification_prompt must be exactly one question")
-            if self.evidence_ids or self.focus_slide_id is not None:
-                raise ValueError(
-                    "needs_clarification cannot claim evidence or focus navigation"
-                )
         else:
             if self.grounding_source is not GroundingSource.NONE:
                 raise ValueError("out_of_scope requires no grounding source")
-            if any(
-                (
-                    self.supporting_turn_ids,
-                    self.evidence_ids,
-                    self.supporting_slide_ids,
-                )
-            ):
-                raise ValueError("out_of_scope cannot include grounding citations")
-            if self.focus_slide_id is not None or self.clarification_prompt is not None:
+            if self.clarification_prompt is not None:
                 raise ValueError(
-                    "out_of_scope cannot focus a slide or request clarification"
+                    "out_of_scope cannot request clarification"
                 )
         return self
-
-    def _validate_grounded_source(self) -> None:
-        if self.grounding_source is GroundingSource.CONVERSATION:
-            if not self.supporting_turn_ids or self.evidence_ids:
-                raise ValueError(
-                    "conversation grounding requires turns and no deck evidence"
-                )
-        elif self.grounding_source is GroundingSource.PRESENTATION:
-            if not self.evidence_ids:
-                raise ValueError(
-                    "presentation grounding requires deck evidence"
-                )
-        elif self.grounding_source is GroundingSource.CONVERSATION_AND_PRESENTATION:
-            if not self.supporting_turn_ids or not self.evidence_ids:
-                raise ValueError(
-                    "combined grounding requires both turns and deck evidence"
-                )
-        else:
-            raise ValueError("grounded scope requires a grounded source")
 
 
 class PlanningContext(ReasoningModel):
@@ -217,6 +182,81 @@ class ValidatedAnswerPlan(SubmitAnswerPlanInput):
     follow_up_turn_id: NonBlankString
     session_version: int = Field(ge=0)
     continuation_preference: ContinuationPreference
+
+    @model_validator(mode="after")
+    def validate_application_grounding(self) -> "ValidatedAnswerPlan":
+        if self.focus_slide_id is not None and (
+            self.focus_slide_id not in self.supporting_slide_ids
+        ):
+            raise ValueError("focus_slide_id must be a supporting slide")
+
+        if self.scope is ScopeMode.GROUNDED:
+            if self.grounding_source is GroundingSource.CONVERSATION:
+                if not self.supporting_turn_ids or self.evidence_ids:
+                    raise ValueError(
+                        "conversation grounding requires turns and no deck evidence"
+                    )
+            elif self.grounding_source is GroundingSource.PRESENTATION:
+                if not self.evidence_ids:
+                    raise ValueError(
+                        "presentation grounding requires validated deck evidence"
+                    )
+            elif (
+                self.grounding_source
+                is GroundingSource.CONVERSATION_AND_PRESENTATION
+            ):
+                if not self.supporting_turn_ids or not self.evidence_ids:
+                    raise ValueError(
+                        "combined grounding requires turns and validated deck evidence"
+                    )
+        elif self.scope is ScopeMode.EXTENDED_KNOWLEDGE:
+            if self.supporting_turn_ids or self.evidence_ids:
+                raise ValueError(
+                    "extended_knowledge cannot claim turn or deck evidence"
+                )
+        elif self.scope is ScopeMode.NEEDS_CLARIFICATION:
+            if self.evidence_ids or self.focus_slide_id is not None:
+                raise ValueError(
+                    "needs_clarification cannot claim evidence or focus navigation"
+                )
+        elif any(
+            (
+                self.supporting_turn_ids,
+                self.evidence_ids,
+                self.supporting_slide_ids,
+                self.focus_slide_id,
+            )
+        ):
+            raise ValueError("out_of_scope cannot include grounding citations")
+        return self
+
+
+class PresentationActionKind(StrEnum):
+    CONTINUE_PRESENTATION = "continue_presentation"
+
+
+class SubmitPresentationActionInput(ReasoningModel):
+    action: PresentationActionKind
+
+
+class ValidatedPresentationAction(SubmitPresentationActionInput):
+    action_id: NonBlankString
+    follow_up_turn_id: NonBlankString
+    session_version: int = Field(ge=0)
+
+
+class CitationFilterReport(ReasoningModel):
+    removed_unknown_turn_ids: tuple[NonBlankString, ...] = ()
+    removed_ineligible_turn_ids: tuple[NonBlankString, ...] = ()
+    removed_unneeded_turn_ids: tuple[NonBlankString, ...] = ()
+    removed_evidence_ids: tuple[NonBlankString, ...] = ()
+    removed_unknown_slide_ids: tuple[NonBlankString, ...] = ()
+    derived_slide_ids_from_evidence: tuple[NonBlankString, ...] = ()
+    derived_evidence_ids_from_slides: tuple[NonBlankString, ...] = ()
+    removed_focus_slide_id: NonBlankString | None = None
+    normalized_focus_slide_id: NonBlankString | None = None
+    original_grounding_source: GroundingSource | None = None
+    normalized_grounding_source: GroundingSource | None = None
 
 
 class PlanningStatus(StrEnum):
@@ -255,4 +295,20 @@ class PlanningSnapshot(ReasoningModel):
     search_results: tuple[SearchMaterialResult, ...] = ()
     terminology_hints: tuple[TerminologyHint, ...] = ()
     accepted_plan: ValidatedAnswerPlan | None = None
+    accepted_action: ValidatedPresentationAction | None = None
+    citation_filter: CitationFilterReport | None = None
     rejection_code: PlanningRejectionCode | None = None
+
+    @model_validator(mode="after")
+    def validate_single_terminal(self) -> "PlanningSnapshot":
+        accepted = sum(
+            terminal is not None
+            for terminal in (self.accepted_plan, self.accepted_action)
+        )
+        if accepted > 1:
+            raise ValueError("planning can accept only one terminal result")
+        if self.status is PlanningStatus.ACCEPTED and accepted != 1:
+            raise ValueError("accepted planning requires one terminal result")
+        if self.status is not PlanningStatus.ACCEPTED and accepted:
+            raise ValueError("non-accepted planning cannot contain a terminal result")
+        return self

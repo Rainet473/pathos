@@ -28,10 +28,12 @@ from voice_presentation.domain.provenance import (
 )
 from voice_presentation.domain.reasoning import (
     MaterialHit,
+    PresentationActionKind,
     PlanningContext,
     PlanningStage,
     SearchMaterialResult,
     ValidatedAnswerPlan,
+    ValidatedPresentationAction,
 )
 from voice_presentation.domain.terminology import resolve_terminology_hints
 
@@ -550,6 +552,39 @@ class ApplicationPresentationSession:
         self._grounding_source = None
         self._clear_active_follow_up()
         return self._finish(events)
+
+    def accept_presentation_action(
+        self,
+        action: ValidatedPresentationAction,
+    ) -> PresentationActionResult:
+        """Validate a model-proposed action, then execute it in application code."""
+
+        self._require_active_follow_up(action.follow_up_turn_id)
+        context = self._active_planning_context
+        assert context is not None
+        if (
+            action.session_version != context.session_version
+            or action.session_version != self._controller.state.session_version
+        ):
+            raise ValueError("stale presentation action")
+        if action.action is not PresentationActionKind.CONTINUE_PRESENTATION:
+            raise ValueError("unsupported presentation action")
+        if self._controller.state.phase not in {
+            PresentationPhase.INTERRUPTED,
+            PresentationPhase.WAITING,
+        }:
+            raise ValueError("presentation action is not valid in the current phase")
+
+        turn_id = self._next_turn_id("narration")
+        events = self._controller.continue_presentation(turn_id=turn_id)
+        generation = self._narration_directive(turn_id)
+        self._planning_stage = None
+        self._planning_failure_code = None
+        self._planning_recovery_code = None
+        self._scope_mode = None
+        self._grounding_source = None
+        self._clear_active_follow_up()
+        return self._finish(events, generation=generation)
 
     def continue_presentation(self) -> PresentationActionResult:
         self._planning_failure_code = None

@@ -9,6 +9,7 @@ from voice_presentation.domain.reasoning import (
     PlanningContext,
     SearchMaterialInput,
     SubmitAnswerPlanInput,
+    ValidatedAnswerPlan,
 )
 
 
@@ -90,9 +91,23 @@ def test_search_input_accepts_the_documented_upper_bounds():
         },
     ],
 )
-def test_plan_contract_requires_support_appropriate_to_scope_and_source(payload):
+def test_plan_proposal_allows_citation_repair_at_the_application_boundary(payload):
+    proposal = SubmitAnswerPlanInput.model_validate(payload)
+
+    assert proposal.scope is ScopeMode.GROUNDED
+
+
+def test_validated_plan_still_requires_coherent_grounding_support():
     with pytest.raises(ValidationError):
-        SubmitAnswerPlanInput.model_validate(payload)
+        ValidatedAnswerPlan(
+            plan_id="answer-plan-1",
+            follow_up_turn_id="user-follow-up-1",
+            session_version=3,
+            continuation_preference=ContinuationPreference.STAY_PAUSED,
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief="This cannot cross the validated boundary without support.",
+        )
 
 
 def test_plan_contract_accepts_all_coherent_scope_source_modes():
@@ -111,6 +126,13 @@ def test_plan_contract_accepts_all_coherent_scope_source_modes():
             evidence_ids=("motorcycle-controls.clutch-and-gears.narration.1",),
             supporting_slide_ids=("clutch-and-gears",),
             focus_slide_id="clutch-and-gears",
+        ),
+        SubmitAnswerPlanInput(
+            scope=ScopeMode.GROUNDED,
+            grounding_source=GroundingSource.PRESENTATION,
+            answer_brief="Resolve bounded support from the verified ABS slide.",
+            supporting_slide_ids=("braking-abs",),
+            focus_slide_id="braking-abs",
         ),
         SubmitAnswerPlanInput(
             scope=ScopeMode.GROUNDED,
@@ -144,6 +166,7 @@ def test_plan_contract_accepts_all_coherent_scope_source_modes():
         ScopeMode.GROUNDED,
         ScopeMode.GROUNDED,
         ScopeMode.GROUNDED,
+        ScopeMode.GROUNDED,
         ScopeMode.EXTENDED_KNOWLEDGE,
         ScopeMode.NEEDS_CLARIFICATION,
         ScopeMode.OUT_OF_SCOPE,
@@ -164,38 +187,60 @@ def test_plan_contract_accepts_all_coherent_scope_source_modes():
             "supportingTurnIds": ["narration-0002"],
         },
         {
-            "scope": "extended_knowledge",
-            "groundingSource": "model_knowledge",
-            "answerBrief": "Deck evidence must not be claimed as model-only support.",
-            "evidenceIds": ["evidence-1"],
-            "supportingSlideIds": ["clutch-and-gears"],
-        },
-        {
             "scope": "needs_clarification",
             "groundingSource": "none",
             "answerBrief": "Ask one question.",
             "clarificationPrompt": "Is it the clutch? Or the gearbox?",
         },
+    ],
+)
+def test_plan_proposal_rejects_incoherent_scope_source_or_clarification(payload):
+    with pytest.raises(ValidationError):
+        SubmitAnswerPlanInput.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "scope": "extended_knowledge",
+            "groundingSource": "model_knowledge",
+            "answerBrief": "Keep the model decision while filtering deck claims.",
+            "evidenceIds": ["evidence-1"],
+            "supportingSlideIds": ["clutch-and-gears"],
+        },
         {
             "scope": "out_of_scope",
             "groundingSource": "none",
-            "answerBrief": "Decline.",
+            "answerBrief": "Decline safely while filtering navigation metadata.",
             "focusSlideId": "braking-abs",
             "supportingSlideIds": ["braking-abs"],
         },
         {
             "scope": "grounded",
             "groundingSource": "presentation",
-            "answerBrief": "Explain the deck.",
+            "answerBrief": "Let the application repair the focus citation.",
             "evidenceIds": ["evidence-1"],
             "supportingSlideIds": ["clutch-and-gears"],
             "focusSlideId": "engine-braking",
         },
     ],
 )
-def test_plan_contract_rejects_incoherent_scope_source_or_focus(payload):
+def test_plan_proposal_defers_citation_coherence_to_the_application(payload):
+    proposal = SubmitAnswerPlanInput.model_validate(payload)
+
+    assert proposal.answer_brief
+
     with pytest.raises(ValidationError):
-        SubmitAnswerPlanInput.model_validate(payload)
+        ValidatedAnswerPlan.model_validate(
+            {
+                **payload,
+                "planId": "answer-plan-1",
+                "followUpTurnId": "user-follow-up-1",
+                "sessionVersion": 3,
+                "continuationPreference": "stay_paused",
+            }
+        )
 
 
 def test_answer_brief_and_clarification_are_bounded():

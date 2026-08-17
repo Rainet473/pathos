@@ -22,6 +22,7 @@ from voice_presentation.content.repository import JsonMaterialRepository
 from voice_presentation.domain.contracts import PresentationPhase
 from voice_presentation.domain.controller import PresentationController
 from voice_presentation.domain.reasoning import (
+    PresentationActionKind,
     PlanningRejectionCode,
     PlanningStage,
     PlanningStatus,
@@ -255,9 +256,11 @@ def test_planning_tools_expose_only_bounded_camel_case_slice_two_schemas():
     assert [schema["function"]["name"] for schema in schemas] == [
         "search_material",
         "submit_answer_plan",
+        "submit_presentation_action",
     ]
     search = schemas[0]["function"]["parameters"]
     submit = schemas[1]["function"]["parameters"]
+    action = schemas[2]["function"]["parameters"]
     assert search["additionalProperties"] is False
     assert search["properties"]["keywords"]["maxItems"] == 8
     assert search["properties"]["maxResults"]["maximum"] == 5
@@ -268,6 +271,56 @@ def test_planning_tools_expose_only_bounded_camel_case_slice_two_schemas():
     assert "answerBrief" in submit["properties"]
     assert "continuationPreference" not in submit["properties"]
     assert set(submit["required"]) == set(submit["properties"])
+    assert action["additionalProperties"] is False
+    assert action["$defs"]["PresentationActionKind"]["enum"] == [
+        "continue_presentation"
+    ]
+    assert set(action["required"]) == set(action["properties"])
+
+
+def test_standalone_continue_tool_is_terminal_without_search_or_answer_plan():
+    case = _case("conversation-citation")
+    model = FakeLLM(
+        [
+            _response(
+                "provider-continue",
+                tool_calls=(
+                    _tool_call(
+                        "submit_presentation_action",
+                        {"action": "continue_presentation"},
+                        call_id="provider-call-continue",
+                    ),
+                ),
+            )
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+
+    run = asyncio.run(
+        planner.plan(
+            case_name="natural-standalone-continue",
+            snapshot=_snapshot_through(case.context.follow_up_turn_id),
+            context=case.context,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.ACCEPTED
+    assert run.snapshot.accepted_plan is None
+    assert run.snapshot.accepted_action is not None
+    assert run.snapshot.accepted_action.action is (
+        PresentationActionKind.CONTINUE_PRESENTATION
+    )
+    assert run.snapshot.search_calls == 0
+    assert model.calls[0]["tool_names"] == (
+        "search_material",
+        "submit_answer_plan",
+        "submit_presentation_action",
+    )
+    assert [entry.name for entry in run.trace if hasattr(entry, "name")] == [
+        "submit_presentation_action",
+        "submit_presentation_action",
+    ]
+    assert "standalone" in SILENT_PLANNER_INSTRUCTIONS.lower()
 
 
 def test_planner_snapshot_exposes_bounded_acronym_hint_without_rewriting_question():
@@ -348,6 +401,7 @@ def test_conversation_reference_uses_one_native_terminal_call_and_discards_text(
     assert model.calls[0]["tool_names"] == (
         "search_material",
         "submit_answer_plan",
+        "submit_presentation_action",
     )
     assert model.calls[0]["tool_choice"] == "required"
     assert model.calls[0]["parallel_tool_calls"] is False
@@ -441,6 +495,91 @@ def test_material_question_round_trips_native_search_output_before_terminal_plan
     )
     assert tool_output["remainingSearchCalls"] == 1
     assert controller.state == before
+
+
+def test_valid_grounded_plan_filters_active_turn_and_logs_the_repair():
+    case = _case("material-search")
+    search_input = case.actions[0].input.model_dump(mode="json", by_alias=True)
+    proposal = case.actions[1].input.model_dump(mode="json", by_alias=True)
+    proposal["supportingTurnIds"] = [
+        case.context.follow_up_turn_id,
+        "invented-turn",
+    ]
+    model = FakeLLM(
+        [
+            _response(
+                "filtered-search",
+                tool_calls=(
+                    _tool_call(
+                        "search_material",
+                        search_input,
+                        call_id="filtered-search",
+                    ),
+                ),
+            ),
+            _response(
+                "filtered-submit",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        proposal,
+                        call_id="filtered-submit",
+                    ),
+                ),
+            ),
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+
+    context_snapshot = _snapshot_through(case.context.follow_up_turn_id)
+    run = asyncio.run(
+        planner.plan(
+            case_name="filter-active-turn-citation",
+            snapshot=context_snapshot,
+            context=case.context,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.ACCEPTED
+    plan = run.snapshot.accepted_plan
+    assert plan is not None
+    assert plan.scope.value == "grounded"
+    assert plan.grounding_source.value == "presentation"
+    assert plan.supporting_turn_ids == ()
+    assert plan.evidence_ids == tuple(proposal["evidenceIds"])
+    report = run.snapshot.citation_filter
+    assert report is not None
+    assert report.removed_ineligible_turn_ids == (
+        case.context.follow_up_turn_id,
+    )
+    assert report.removed_unknown_turn_ids == ("invented-turn",)
+    terminal_result = next(
+        entry
+        for entry in run.trace
+        if isinstance(entry, FunctionResultTrace)
+        and entry.name == "submit_answer_plan"
+    )
+    assert terminal_result.output["citationFilter"][
+        "removedIneligibleTurnIds"
+    ] == [case.context.follow_up_turn_id]
+    decision = run.trace[-1]
+    assert isinstance(decision, ApplicationDecisionTrace)
+    assert decision.accepted is True
+    assert decision.reason_code == "accepted_with_filtered_citations"
+    assert decision.supporting_turn_ids == ()
+    replayed = ReasoningContextSnapshot.model_validate(
+        {
+            **context_snapshot.model_dump(mode="json", by_alias=True),
+            "trace": [
+                *context_snapshot.model_dump(mode="json", by_alias=True)["trace"],
+                *[
+                    entry.model_dump(mode="json", by_alias=True)
+                    for entry in run.trace
+                ],
+            ],
+        }
+    )
+    assert replayed.trace[-1] == decision
 
 
 def test_search_tool_is_removed_after_the_second_allowed_search():
@@ -632,14 +771,14 @@ def test_repeated_malformed_json_stops_after_one_correction():
     assert len(run.requests) == 2
 
 
-def test_valid_but_untrusted_terminal_arguments_are_rejected_by_application():
+def test_unparseable_untrusted_evidence_without_support_is_rejected():
     case = _case("conversation-citation")
     invalid = {
         "scope": "grounded",
         "groundingSource": "presentation",
-        "answerBrief": "Claim deck support that was not searched.",
-        "evidenceIds": ["motorcycle-controls.clutch-and-gears.narration.1"],
-        "supportingSlideIds": ["clutch-and-gears"],
+        "answerBrief": "Claim support that cannot be resolved.",
+        "evidenceIds": ["unparseable-evidence"],
+        "supportingSlideIds": [],
     }
     model = FakeLLM(
         [
@@ -669,16 +808,94 @@ def test_valid_but_untrusted_terminal_arguments_are_rejected_by_application():
     assert run.snapshot.status is PlanningStatus.REJECTED
     assert run.snapshot.rejection_code is PlanningRejectionCode.UNKNOWN_EVIDENCE
     assert run.snapshot.accepted_plan is None
+    terminal_result = next(
+        entry
+        for entry in run.trace
+        if isinstance(entry, FunctionResultTrace)
+        and entry.name == "submit_answer_plan"
+    )
+    assert terminal_result.output["citationFilter"]["removedEvidenceIds"] == [
+        "unparseable-evidence"
+    ]
     decision = run.trace[-1]
     assert isinstance(decision, ApplicationDecisionTrace)
     assert decision.accepted is False
     assert decision.reason_code == "unknown_evidence"
 
 
-def test_historical_evidence_rejection_can_search_current_turn_and_replan():
+def test_rejected_unknown_turn_remains_in_raw_trace_without_poisoning_replay():
+    case = _case("conversation-citation")
+    proposal = {
+        "scope": "grounded",
+        "groundingSource": "conversation",
+        "answerBrief": "Attempt to cite an invented conversation turn.",
+        "supportingTurnIds": ["invented-turn"],
+    }
+    model = FakeLLM(
+        [
+            _response(
+                "unknown-turn",
+                tool_calls=(
+                    _tool_call(
+                        "submit_answer_plan",
+                        proposal,
+                        call_id="unknown-turn",
+                    ),
+                ),
+            )
+        ]
+    )
+    planner = LiveKitSilentPlanner(deck=_deck(), model_client=model)
+    context_snapshot = _snapshot_through(case.context.follow_up_turn_id)
+
+    run = asyncio.run(
+        planner.plan(
+            case_name="rejected-unknown-turn",
+            snapshot=context_snapshot,
+            context=case.context,
+        )
+    )
+
+    assert run.snapshot.status is PlanningStatus.REJECTED
+    assert run.snapshot.rejection_code is PlanningRejectionCode.UNKNOWN_TURN
+    terminal_call = next(
+        entry
+        for entry in run.trace
+        if isinstance(entry, FunctionCallTrace)
+        and entry.name == "submit_answer_plan"
+    )
+    assert terminal_call.arguments["supportingTurnIds"] == ["invented-turn"]
+    terminal_result = next(
+        entry
+        for entry in run.trace
+        if isinstance(entry, FunctionResultTrace)
+        and entry.name == "submit_answer_plan"
+    )
+    assert terminal_result.output["citationFilter"]["removedUnknownTurnIds"] == [
+        "invented-turn"
+    ]
+    decision = run.trace[-1]
+    assert isinstance(decision, ApplicationDecisionTrace)
+    assert decision.accepted is False
+    assert decision.supporting_turn_ids == ()
+    replayed = ReasoningContextSnapshot.model_validate(
+        {
+            **context_snapshot.model_dump(mode="json", by_alias=True),
+            "trace": [
+                *context_snapshot.model_dump(mode="json", by_alias=True)["trace"],
+                *[
+                    entry.model_dump(mode="json", by_alias=True)
+                    for entry in run.trace
+                ],
+            ],
+        }
+    )
+    assert replayed.trace[-1] == decision
+
+
+def test_historical_evidence_recovers_packaged_slide_without_provider_retry():
     case = _case("material-search")
     proposal = case.actions[1].input.model_dump(mode="json", by_alias=True)
-    search_input = case.actions[0].input.model_dump(mode="json", by_alias=True)
     model = FakeLLM(
         [
             _response(
@@ -688,26 +905,6 @@ def test_historical_evidence_rejection_can_search_current_turn_and_replan():
                         "submit_answer_plan",
                         proposal,
                         call_id="stale-submit",
-                    ),
-                ),
-            ),
-            _response(
-                "current-search",
-                tool_calls=(
-                    _tool_call(
-                        "search_material",
-                        search_input,
-                        call_id="current-search",
-                    ),
-                ),
-            ),
-            _response(
-                "corrected-submit",
-                tool_calls=(
-                    _tool_call(
-                        "submit_answer_plan",
-                        proposal,
-                        call_id="corrected-submit",
                     ),
                 ),
             ),
@@ -727,16 +924,21 @@ def test_historical_evidence_rejection_can_search_current_turn_and_replan():
 
     assert run.snapshot.status is PlanningStatus.ACCEPTED
     assert run.snapshot.accepted_plan is not None
-    assert len(run.requests) == 3
-    assert model.calls[1]["tool_names"] == ("search_material",)
-    assert model.calls[2]["tool_names"] == ("submit_answer_plan",)
-    correction = json.loads(model.calls[1]["provider_messages"][-1]["content"])
-    assert correction["reasonCode"] == "unknown_evidence"
-    assert "current planning turn" in correction["applicationInstruction"]
+    assert len(run.requests) == 1
+    assert run.snapshot.accepted_plan.evidence_ids == (
+        "motorcycle-controls.clutch-and-gears.summary.0",
+    )
+    report = run.snapshot.citation_filter
+    assert report is not None
+    assert report.removed_evidence_ids == tuple(proposal["evidenceIds"])
+    assert report.derived_evidence_ids_from_slides == (
+        "motorcycle-controls.clutch-and-gears.summary.0",
+    )
     decisions = [
         entry for entry in run.trace if isinstance(entry, ApplicationDecisionTrace)
     ]
-    assert [decision.accepted for decision in decisions] == [False, True]
+    assert [decision.accepted for decision in decisions] == [True]
+    assert decisions[0].reason_code == "accepted_with_filtered_citations"
 
 
 def test_terminal_response_received_before_deadline_finishes_local_validation():
@@ -780,11 +982,11 @@ def test_one_parseable_schema_failure_can_self_correct_through_native_tool_outpu
     case = _case("conversation-citation")
     incoherent = {
         "scope": "grounded",
-        "groundingSource": "conversation_and_presentation",
+        "groundingSource": "model_knowledge",
         "answerBrief": "Clarify the earlier use of response.",
         "supportingTurnIds": ["narration-0002"],
         "evidenceIds": [],
-        "supportingSlideIds": ["control-loop"],
+        "supportingSlideIds": [],
         "focusSlideId": None,
         "clarificationPrompt": None,
     }
@@ -837,8 +1039,7 @@ def test_one_parseable_schema_failure_can_self_correct_through_native_tool_outpu
             "Correct the tool arguments once using this validation result."
         ),
         "reasonCode": (
-            "validation:root:value_error:combined grounding requires both "
-            "turns and deck evidence"
+            "validation:root:value_error:grounded scope requires a grounded source"
         ),
     }
 

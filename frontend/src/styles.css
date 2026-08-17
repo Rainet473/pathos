@@ -489,6 +489,18 @@ button:disabled {
   overflow: hidden;
 }
 
+.workspace-transcript {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-transcript .live-transcript {
+  min-height: 0;
+  max-height: none;
+  flex: 1;
+  overflow-y: auto;
+}
+
 .workspace-events {
   overflow-y: auto;
 }
